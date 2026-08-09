@@ -133,6 +133,11 @@ button.full { width: 100%; }
   padding: 0 24px 40px;
 }
 
+/* Added background color to the main content area */
+main.container {
+  background-color: #f9f9f9; /* Light grey background */
+}
+
 .hint {
   color: var(--muted);
   margin: 0 0 20px;
