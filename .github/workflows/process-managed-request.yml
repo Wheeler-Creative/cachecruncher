@@ -1,0 +1,125 @@
+name: Process managed website request
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Optional Supabase request id
+        required: false
+        type: string
+
+concurrency:
+  group: managed-request-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  find-request:
+    runs-on: ubuntu-latest
+    outputs:
+      request_id: ${{ steps.find.outputs.request_id }}
+      request_branch: ${{ steps.find.outputs.request_branch }}
+      pull_request_url: ${{ steps.find.outputs.pull_request_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+      - id: find
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/find-queued.mjs
+
+  process-request:
+    needs: find-request
+    if: ${{ needs.find-request.outputs.request_id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.find-request.outputs.request_branch || 'main' }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+      - name: Generate bounded edits
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+        run: node scripts/managed-site/process-request.mjs
+      - name: Build generated site data
+        run: npm run build:data --if-present
+      - name: Validate change
+        run: |
+          npm run check --if-present
+          node --check src/worker.js
+          npx wrangler deploy --config wrangler.preview.jsonc --dry-run
+      - name: Commit and open or update pull request
+        id: git
+        env:
+          GH_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          EXISTING_BRANCH: ${{ needs.find-request.outputs.request_branch }}
+          EXISTING_PR: ${{ needs.find-request.outputs.pull_request_url }}
+        run: |
+          git config user.name "wheelers-websites-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          gh auth setup-git
+          branch="${EXISTING_BRANCH:-ai/request-${REQUEST_ID}}"
+          if [[ -z "$EXISTING_BRANCH" ]]; then git checkout -b "$branch"; fi
+          git add -A
+          git diff --cached --quiet && { echo "No effective changes were generated"; exit 1; }
+          git commit -m "Website request ${REQUEST_ID}"
+          git push --set-upstream origin "$branch"
+          pr_url="$EXISTING_PR"
+          if [[ -z "$pr_url" ]]; then
+            pr_url=$(gh pr create --base main --head "$branch" --title "Website request ${REQUEST_ID}" --body "Automated bounded website change. Review the Cloudflare preview in the customer portal before approval.")
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
+      - name: Deploy isolated preview
+        id: preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+        run: |
+          repo_name="${GITHUB_REPOSITORY#*/}"
+          prefix=$(printf '%s' "$repo_name" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')
+          preview_name="${prefix}-request-${REQUEST_ID:0:8}"
+          npx wrangler deploy --config wrangler.preview.jsonc --name "$preview_name" | tee deploy-output.txt
+          preview_url=$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' deploy-output.txt | tail -n 1)
+          test -n "$preview_url"
+          echo "name=$preview_name" >> "$GITHUB_OUTPUT"
+          echo "url=$preview_url" >> "$GITHUB_OUTPUT"
+      - name: Mark preview ready
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+          PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
+          REQUEST_BRANCH: ${{ steps.git.outputs.branch }}
+          PULL_REQUEST_URL: ${{ steps.git.outputs.pr_url }}
+        run: node scripts/managed-site/update-request.mjs preview_ready
+      - name: Mark failed
+        if: ${{ failure() }}
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/update-request.mjs failed

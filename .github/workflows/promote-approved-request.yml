@@ -1,0 +1,111 @@
+name: Promote approved website request
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Optional Supabase request id
+        required: false
+        type: string
+
+concurrency:
+  group: managed-promotion-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  find-request:
+    runs-on: ubuntu-latest
+    outputs:
+      request_id: ${{ steps.find.outputs.request_id }}
+      request_branch: ${{ steps.find.outputs.request_branch }}
+      preview_worker_name: ${{ steps.find.outputs.preview_worker_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+      - id: find
+        env:
+          REQUEST_ID: ${{ inputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/find-approved.mjs
+
+  promote:
+    needs: find-request
+    if: ${{ needs.find-request.outputs.request_id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.find-request.outputs.request_branch }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+      - name: Validate approved branch
+        run: |
+          npm run build:data --if-present
+          npm run check --if-present
+          node --check src/worker.js
+          npx wrangler deploy --dry-run
+      - name: Collect change details
+        id: change
+        run: |
+          git fetch origin main
+          {
+            echo "files<<EOF"
+            git diff --name-only origin/main...HEAD
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "summary=$(git log -1 --pretty=%s | tr -d '\n' | cut -c1-200)" >> "$GITHUB_OUTPUT"
+      - name: Merge approved pull request
+        env:
+          GH_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
+        run: gh pr merge "${{ needs.find-request.outputs.request_branch }}" --squash --delete-branch
+      - name: Deploy merged main branch
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+          npm run build:data --if-present
+          npx wrangler deploy --keep-vars
+      - name: Remove preview worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler delete --name "${{ needs.find-request.outputs.preview_worker_name }}" --force
+      - name: Mark deployed
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/update-request.mjs deployed
+      - name: Record site memory
+        continue-on-error: true
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CHANGED_FILES: ${{ steps.change.outputs.files }}
+          CHANGE_SUMMARY: ${{ steps.change.outputs.summary }}
+        run: node scripts/managed-site/record-change.mjs deployed
+      - name: Mark failed
+        if: ${{ failure() }}
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/update-request.mjs failed

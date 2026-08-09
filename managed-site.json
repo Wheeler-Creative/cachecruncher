@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "repository": "Wheeler-Creative/cachecruncher",
+  "repositoryAliases": [],
+  "allowedRoots": [
+    "public"
+  ],
+  "allowedExtensions": [
+    ".html",
+    ".css",
+    ".js",
+    ".jsx"
+  ],
+  "maxFiles": 8,
+  "maxFileBytes": 80000,
+  "maxSourceBytes": 500000
+}
