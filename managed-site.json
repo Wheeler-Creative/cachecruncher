@@ -1,7 +1,9 @@
 {
   "schemaVersion": 1,
   "repository": "Wheeler-Creative/cachecruncher",
-  "repositoryAliases": [],
+  "repositoryAliases": [
+    "itswheeler/cachecruncher"
+  ],
   "allowedRoots": [
     "public"
   ],
