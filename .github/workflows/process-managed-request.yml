@@ -9,6 +9,19 @@ on:
         description: Optional Supabase request id
         required: false
         type: string
+      resume_branch:
+        description: Existing generated branch to resume
+        required: false
+        type: string
+      resume_pr_url:
+        description: Existing pull request URL to resume
+        required: false
+        type: string
+      resume_existing:
+        description: Skip generation and resume the existing branch
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: managed-request-${{ github.repository }}
@@ -19,8 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       request_id: ${{ steps.find.outputs.request_id }}
-      request_branch: ${{ steps.find.outputs.request_branch }}
-      pull_request_url: ${{ steps.find.outputs.pull_request_url }}
+      request_branch: ${{ inputs.resume_branch || steps.find.outputs.request_branch }}
+      pull_request_url: ${{ inputs.resume_pr_url || steps.find.outputs.pull_request_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -63,6 +76,7 @@ jobs:
       - name: Install dependencies
         run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
       - name: Generate bounded edits
+        if: ${{ inputs.resume_existing != true }}
         env:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -84,7 +98,13 @@ jobs:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
           EXISTING_BRANCH: ${{ needs.find-request.outputs.request_branch }}
           EXISTING_PR: ${{ needs.find-request.outputs.pull_request_url }}
+          RESUME_EXISTING: ${{ inputs.resume_existing }}
         run: |
+          if [[ "$RESUME_EXISTING" == "true" ]]; then
+            echo "branch=$EXISTING_BRANCH" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git config user.name "wheelers-websites-bot"
           git config user.email "actions@users.noreply.github.com"
           git config --local --unset-all http.https://github.com/.extraheader || true
