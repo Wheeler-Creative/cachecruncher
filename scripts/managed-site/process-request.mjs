@@ -55,23 +55,7 @@ async function fetchRequest() {
   return request;
 }
 
-async function generateEdits(request, source) {
-  const prompt = {
-    role: "You make bounded edits to an existing customer website.",
-    task: request.request_body,
-    customer_policy: request.customer_sites?.request_policy || {},
-    allowed_roots: config.allowedRoots,
-    allowed_extensions: config.allowedExtensions,
-    source_files: source,
-    forbidden: ["infrastructure", "authentication", "secrets", "billing", "backend", "package files", "dependencies", "generated commands", "destructive operations"],
-    response_schema: { summary: "string", edits: [{ path: "public/example.html", content: "complete replacement file content" }] },
-    constraints: [
-      "Make only the smallest changes needed.",
-      "Edit existing files only.",
-      `Return at most ${config.maxFiles} edits.`,
-      "Return one JSON object and no markdown or commands."
-    ]
-  };
+async function openRouterJson(name, schema, messages, temperature = 0.2) {
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -82,47 +66,124 @@ async function generateEdits(request, source) {
     },
     body: JSON.stringify({
       model: process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite",
-      temperature: 0.2,
+      temperature,
       response_format: {
         type: "json_schema",
         json_schema: {
-          name: "managed_site_edits",
+          name,
           strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["summary", "edits"],
-            properties: {
-              summary: { type: "string" },
-              edits: {
-                type: "array",
-                minItems: 1,
-                maxItems: config.maxFiles,
-                items: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["path", "content"],
-                  properties: {
-                    path: { type: "string" },
-                    content: { type: "string" }
-                  }
-                }
-              }
-            }
-          }
+          schema
         }
       },
-      messages: [
-        { role: "system", content: "Return a single valid JSON object only. Never include commands." },
-        { role: "user", content: JSON.stringify(prompt) }
-      ]
+      messages
     })
   });
   if (!response.ok) throw new Error(`OpenRouter failed: ${await response.text()}`);
   const payload = await response.json();
   const content = payload?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenRouter returned no edit content");
+  if (!content) throw new Error("OpenRouter returned no structured content");
   return JSON.parse(content);
+}
+
+async function planChange(request, source) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary", "relevant_files", "steps", "risks", "verification"],
+    properties: {
+      summary: { type: "string" },
+      relevant_files: {
+        type: "array",
+        minItems: 1,
+        maxItems: config.maxFiles,
+        items: { type: "string" }
+      },
+      steps: { type: "array", minItems: 1, maxItems: 10, items: { type: "string" } },
+      risks: { type: "array", maxItems: 8, items: { type: "string" } },
+      verification: { type: "array", minItems: 1, maxItems: 10, items: { type: "string" } }
+    }
+  };
+  const prompt = {
+    role: "You plan a small, bounded edit to an existing customer website.",
+    task: request.request_body,
+    customer_policy: request.customer_sites?.request_policy || {},
+    available_source_files: source,
+    constraints: [
+      "Inspect the supplied code before planning.",
+      "Choose only existing files that are directly relevant.",
+      "Prefer the smallest complete change that satisfies the request.",
+      "Name concrete verification steps tied to the requested visible outcome.",
+      "Do not plan infrastructure, authentication, secrets, billing, backend, package, or dependency changes."
+    ]
+  };
+  return openRouterJson("managed_site_plan", schema, [
+    { role: "system", content: "Create a precise implementation plan grounded only in the supplied repository code." },
+    { role: "user", content: JSON.stringify(prompt) }
+  ], 0.1);
+}
+
+function validatePlan(plan, source) {
+  if (!plan || typeof plan.summary !== "string" || !Array.isArray(plan.relevant_files) || !plan.relevant_files.length) {
+    throw new Error("Model response has no usable implementation plan");
+  }
+  for (const file of plan.relevant_files) {
+    if (typeof file !== "string" || !allowedPath(file) || !Object.hasOwn(source, file)) {
+      throw new Error(`Plan selected a forbidden or unavailable file: ${file}`);
+    }
+  }
+}
+
+async function recordPlan(plan) {
+  const response = await fetch(restUrl("edit_request_events"), {
+    method: "POST",
+    headers: headers({ Prefer: "return=minimal" }),
+    body: JSON.stringify({ request_id: requestId, event_type: "implementation_plan_created", payload: plan })
+  });
+  if (!response.ok) console.error(`Unable to record implementation plan: ${await response.text()}`);
+}
+
+async function generateEdits(request, source, plan) {
+  const schema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary", "edits"],
+    properties: {
+      summary: { type: "string" },
+      edits: {
+        type: "array",
+        minItems: 1,
+        maxItems: config.maxFiles,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["path", "content"],
+          properties: {
+            path: { type: "string" },
+            content: { type: "string" }
+          }
+        }
+      }
+    }
+  };
+  const selectedSource = Object.fromEntries(plan.relevant_files.map((file) => [file, source[file]]));
+  const prompt = {
+    role: "You implement a reviewed plan for a bounded customer website edit.",
+    task: request.request_body,
+    implementation_plan: plan,
+    source_files: selectedSource,
+    forbidden: ["infrastructure", "authentication", "secrets", "billing", "backend", "package files", "dependencies", "generated commands", "destructive operations"],
+    constraints: [
+      "Follow the implementation plan exactly.",
+      "Make only the smallest changes needed.",
+      "Edit existing selected files only.",
+      `Return at most ${config.maxFiles} edits.`,
+      "Return complete replacement file content."
+    ]
+  };
+  return openRouterJson("managed_site_edits", schema, [
+    { role: "system", content: "Implement the supplied code-grounded plan. Return valid JSON only and never include commands." },
+    { role: "user", content: JSON.stringify(prompt) }
+  ]);
 }
 
 function validate(result) {
@@ -140,7 +201,12 @@ function validate(result) {
 try {
   const request = await fetchRequest();
   await updateRequest(requestId, { status: "planning", updated_at: new Date().toISOString() });
-  const result = await generateEdits(request, await sourceContext());
+  const source = await sourceContext();
+  const plan = await planChange(request, source);
+  validatePlan(plan, source);
+  await recordPlan(plan);
+  console.log(JSON.stringify({ requestId, plan }));
+  const result = await generateEdits(request, source, plan);
   validate(result);
   for (const edit of result.edits) await writeFile(edit.path, edit.content, "utf8");
   await updateRequest(requestId, { status: "testing", updated_at: new Date().toISOString() });
