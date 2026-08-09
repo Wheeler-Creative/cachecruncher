@@ -133,9 +133,9 @@ button.full { width: 100%; }
   padding: 0 24px 40px;
 }
 
-/* Added background color to the main content area */
+/* Removed background color from the main content area */
 main.container {
-  background-color: #e0f2fe; /* Light blue background */
+  /* background-color: #e0f2fe; */
 }
 
 .hint {
