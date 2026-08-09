@@ -83,7 +83,35 @@ async function generateEdits(request, source) {
     body: JSON.stringify({
       model: process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite",
       temperature: 0.2,
-      response_format: { type: "json_object" },
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "managed_site_edits",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["summary", "edits"],
+            properties: {
+              summary: { type: "string" },
+              edits: {
+                type: "array",
+                minItems: 1,
+                maxItems: config.maxFiles,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["path", "content"],
+                  properties: {
+                    path: { type: "string" },
+                    content: { type: "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       messages: [
         { role: "system", content: "Return a single valid JSON object only. Never include commands." },
         { role: "user", content: JSON.stringify(prompt) }
