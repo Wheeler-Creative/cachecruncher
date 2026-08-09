@@ -135,7 +135,7 @@ button.full { width: 100%; }
 
 /* Added background color to the main content area */
 main.container {
-  background-color: #f9f9f9; /* Light grey background */
+  background-color: #e0f2fe; /* Light blue background */
 }
 
 .hint {
