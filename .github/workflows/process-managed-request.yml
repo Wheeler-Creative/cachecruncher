@@ -28,6 +28,16 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+      - name: Validate managed-site credentials
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MANAGED_SITE_GITHUB_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
+        run: >-
+          node -e 'const names=["SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY","OPENROUTER_API_KEY","CLOUDFLARE_API_TOKEN","CLOUDFLARE_ACCOUNT_ID","MANAGED_SITE_GITHUB_TOKEN"]; const missing=names.filter((name)=>!process.env[name]); if(missing.length){console.error(`Missing managed-site secrets: ${missing.join(", ")}`); process.exit(1)}'
       - id: find
         env:
           REQUEST_ID: ${{ inputs.request_id }}
