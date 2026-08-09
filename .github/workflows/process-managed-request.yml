@@ -86,9 +86,18 @@ jobs:
         run: node scripts/managed-site/process-request.mjs
       - name: Build generated site data
         run: npm run build:data --if-present
-      - name: Validate change
+      - name: Run repository quality checks
         run: |
+          npm run lint --if-present
+          npm test --if-present
           npm run check --if-present
+      - name: Audit production dependencies
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm audit --omit=dev --audit-level=high
+      - name: Scan changed code for security risks
+        run: node scripts/managed-site/security-check.mjs
+      - name: Validate Worker bundle
+        run: |
           node --check src/worker.js
           npx wrangler deploy --config wrangler.preview.jsonc --dry-run
       - name: Commit and open or update pull request
@@ -136,6 +145,28 @@ jobs:
           test -n "$preview_url"
           echo "name=$preview_name" >> "$GITHUB_OUTPUT"
           echo "url=$preview_url" >> "$GITHUB_OUTPUT"
+      - name: Install visual verification browser
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Verify preview visually
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_VISION_MODEL: ${{ vars.OPENROUTER_VISION_MODEL }}
+        run: node scripts/managed-site/verify-preview.mjs
+      - name: Upload visual verification evidence
+        if: ${{ always() && steps.preview.outputs.url != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-verification-${{ needs.find-request.outputs.request_id }}
+          path: .managed-site-artifacts
+          include-hidden-files: true
+          retention-days: 14
       - name: Mark preview ready
         env:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
@@ -146,6 +177,13 @@ jobs:
           REQUEST_BRANCH: ${{ steps.git.outputs.branch }}
           PULL_REQUEST_URL: ${{ steps.git.outputs.pr_url }}
         run: node scripts/managed-site/update-request.mjs preview_ready
+      - name: Remove rejected preview
+        if: ${{ failure() && steps.preview.outputs.name != '' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
+        run: npx wrangler delete "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc --force
       - name: Mark failed
         if: ${{ failure() }}
         env:

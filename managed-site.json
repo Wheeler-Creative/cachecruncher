@@ -13,6 +13,9 @@
     ".js",
     ".jsx"
   ],
+  "verificationPaths": [
+    "/"
+  ],
   "maxFiles": 8,
   "maxFileBytes": 80000,
   "maxSourceBytes": 500000

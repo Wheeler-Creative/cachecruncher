@@ -12,7 +12,11 @@ const patch = {
   ...(process.env.PREVIEW_WORKER_NAME ? { preview_worker_name: process.env.PREVIEW_WORKER_NAME } : {}),
   ...(process.env.REQUEST_BRANCH ? { request_branch: process.env.REQUEST_BRANCH } : {}),
   ...(process.env.PULL_REQUEST_URL ? { pull_request_url: process.env.PULL_REQUEST_URL } : {}),
-  ...(status === "deployed" ? { deployed_at: new Date().toISOString() } : {})
+  ...(status === "deployed" ? {
+    deployed_at: new Date().toISOString(),
+    preview_url: null,
+    preview_worker_name: null
+  } : {})
 };
 await updateRequest(process.env.REQUEST_ID, patch);
 console.log(`Request ${process.env.REQUEST_ID} updated to ${status}`);
