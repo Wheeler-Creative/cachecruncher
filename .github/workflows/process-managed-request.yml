@@ -1,8 +1,6 @@
 name: Process managed website request
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       request_id:
