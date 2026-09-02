@@ -2,6 +2,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { headers, loadConfig, repositoryMatches, requireEnvironment, restUrl, updateRequest } from "./lib.mjs";
+import { standardsRegressions } from "../site-standards.mjs";
 
 requireEnvironment(["REQUEST_ID", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "OPENROUTER_API_KEY", "GITHUB_REPOSITORY"]);
 const config = await loadConfig();
@@ -65,7 +66,7 @@ async function openRouterJson(name, schema, messages, temperature = 0.2) {
       "x-title": "Wheelers Websites Managed Site Editor"
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite",
+      model: process.env.OPENROUTER_CODER_MODEL || "openrouter/pareto-code",
       temperature,
       response_format: {
         type: "json_schema",
@@ -198,6 +199,28 @@ function validate(result) {
   }
 }
 
+function routeForFile(file) {
+  const relative = String(file).replace(/^public\//, "").replace(/index\.html?$/i, "");
+  return `/${relative}`.replace(/\/+/g, "/");
+}
+
+export async function assertNoStandardsRegressions(originals, edits, siteRoot = process.cwd()) {
+  const problems = [];
+  for (const edit of edits) {
+    if (!/\.html?$/i.test(edit.path)) continue;
+    const before = originals.get(edit.path) ?? "";
+    const { failures, warnings } = await standardsRegressions(before, edit.content, {
+      route: routeForFile(edit.path),
+      siteRoot
+    });
+    if (warnings.length) console.error(`${edit.path}: ${warnings.join("; ")}`);
+    for (const failure of failures) problems.push(`${edit.path}: ${failure}`);
+  }
+  if (problems.length) {
+    throw new Error(`This change would break the site's standards: ${problems.join("; ")}`);
+  }
+}
+
 try {
   const request = await fetchRequest();
   await updateRequest(requestId, { status: "planning", updated_at: new Date().toISOString() });
@@ -208,6 +231,8 @@ try {
   console.log(JSON.stringify({ requestId, plan }));
   const result = await generateEdits(request, source, plan);
   validate(result);
+  const originals = new Map(await Promise.all(result.edits.map(async (edit) => [edit.path, await readFile(edit.path, "utf8")])));
+  await assertNoStandardsRegressions(originals, result.edits);
   for (const edit of result.edits) await writeFile(edit.path, edit.content, "utf8");
   await updateRequest(requestId, { status: "testing", updated_at: new Date().toISOString() });
   console.log(JSON.stringify({ requestId, summary: result.summary, files: result.edits.map((edit) => edit.path) }));

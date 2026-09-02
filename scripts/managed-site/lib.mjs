@@ -36,11 +36,19 @@ export async function output(values) {
   await appendFile(process.env.GITHUB_OUTPUT, `${lines}\n`);
 }
 
-export async function updateRequest(requestId, patch) {
-  const response = await fetch(restUrl("edit_requests", `?id=eq.${encodeURIComponent(requestId)}`), {
+export async function patchRows(table, query, patch, fetchImpl = fetch) {
+  const response = await fetchImpl(restUrl(table, query), {
     method: "PATCH",
     headers: headers({ Prefer: "return=minimal" }),
     body: JSON.stringify(patch)
   });
-  if (!response.ok) throw new Error(`Unable to update request: ${await response.text()}`);
+  if (!response.ok) throw new Error(`Unable to update ${table}: ${await response.text()}`);
+}
+
+export async function updateRequest(requestId, patch, fetchImpl = fetch) {
+  return patchRows("edit_requests", `?id=eq.${encodeURIComponent(requestId)}`, patch, fetchImpl);
+}
+
+export async function updateBuildsForRequest(requestId, patch, fetchImpl = fetch) {
+  return patchRows("site_builds", `?edit_request_id=eq.${encodeURIComponent(requestId)}`, patch, fetchImpl);
 }
