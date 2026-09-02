@@ -97,7 +97,9 @@ jobs:
       - name: Validate Worker bundle
         run: |
           node --check src/worker.js
-          npx wrangler deploy --config wrangler.preview.jsonc --dry-run
+          # The site's own config: the preview is derived from it at deploy
+          # time, so this is the shape that actually has to be valid.
+          npx wrangler deploy --dry-run
       - name: Commit and open or update pull request
         id: git
         env:
@@ -138,7 +140,12 @@ jobs:
           repo_name="${GITHUB_REPOSITORY#*/}"
           prefix=$(printf '%s' "$repo_name" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')
           preview_name="${prefix}-request-${REQUEST_ID:0:8}"
-          npx wrangler deploy --config wrangler.preview.jsonc --name "$preview_name" | tee deploy-output.txt
+          # Derived from wrangler.jsonc now, not from a second file written once
+          # at provision time. That file copied a fixed list of fields and so
+          # never carried this site's bindings, and every preview of it answered
+          # 404 for anything they served.
+          PREVIEW_WORKER_NAME="$preview_name" node scripts/managed-site/preview-config.mjs
+          npx wrangler deploy --config wrangler.preview.generated.jsonc | tee deploy-output.txt
           preview_url=$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' deploy-output.txt | tail -n 1)
           test -n "$preview_url"
           echo "name=$preview_name" >> "$GITHUB_OUTPUT"
@@ -181,7 +188,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
-        run: npx wrangler delete "$PREVIEW_WORKER_NAME" --config wrangler.preview.jsonc --force
+        # --name, not a positional: the bare form makes wrangler enumerate
+        # account resources the platform token cannot always read, which fails
+        # the step even though the worker was deleted.
+        run: npx wrangler delete --name "$PREVIEW_WORKER_NAME" --force
       - name: Mark failed
         if: ${{ failure() }}
         env:
