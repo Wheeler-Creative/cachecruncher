@@ -448,6 +448,56 @@ export function stylesheetIssues(css) {
   return issues;
 }
 
+// ---- Copyright ---------------------------------------------------------------
+
+// © and a year, in any of the shapes a footer uses:
+//   © 2024 Best Picture      &copy; 2024      Copyright © 2020-2024
+// The year captured is the LAST one, because a range ends at the current year.
+// What separates the two years of a range. Entities are here because a real
+// footer is authored HTML: "&copy; 2019&ndash;2023" is the common spelling and
+// a literal en-dash is the rare one. Getting this wrong is worse than not
+// matching at all - an unrecognised separator makes the FIRST year look like
+// the only year, so the repair rewrites the start of the range and leaves the
+// end stale, turning "2019&ndash;2023" into "2026&ndash;2023". Backwards, and
+// on every page.
+const RANGE = String.raw`\s*(?:[-–—]|to|&[a-z]+;|&#x?[0-9a-f]+;)\s*`;
+
+// Deliberately shared by the check and the repair below. Symmetry is the point:
+// whatever is reported as a finding must be exactly what gets rewritten, or a
+// page fails the standard with no automated pass able to clear it.
+const COPYRIGHT = new RegExp(
+  String.raw`(©|&copy;|&#169;|\bcopyright\b)([^0-9<]{0,20})((?:\d{4}${RANGE})?)(\d{4})`,
+  "gi"
+);
+
+// A stale copyright year is the most visible way a generated site announces it
+// was made by something with no idea what day it is. One shipped reading
+// "© 2024 Best Picture. All rights reserved." in 2026 - not wrong by accident,
+// because nothing had ever told the generator what year it was.
+export function copyrightIssues(html, { year = new Date().getUTCFullYear() } = {}) {
+  const issues = [];
+  for (const match of String(html || "").matchAll(COPYRIGHT)) {
+    const found = Number(match[4]);
+    if (found === year) continue;
+    issues.push(found > year
+      ? `copyright year ${found} is in the future; this year is ${year}`
+      : `copyright year ${found} is stale; this year is ${year}`);
+  }
+  return issues;
+}
+
+// Rewrites the year rather than asking a model to get it right.
+//
+// The prompts carry the date now, which should be enough - but "should be
+// enough" is how the wrong year shipped in the first place. This runs over the
+// finished page, so the outcome does not depend on the model having listened.
+// A range keeps its start: "© 2020-2024" becomes "© 2020-2026", which is what
+// a business trading since 2020 actually wants.
+export function freshenCopyrightYear(html, { year = new Date().getUTCFullYear() } = {}) {
+  return String(html || "").replace(COPYRIGHT, (whole, mark, gap, range, found) =>
+    (Number(found) === year ? whole : `${mark}${gap}${range}${year}`));
+}
+
 // ---- Images ----------------------------------------------------------------
 
 // An image with no intrinsic size makes the page jump as it loads, which is a
@@ -554,8 +604,11 @@ export function robotsIssues(txt, { origin = "" } = {}) {
 // What the builder, the editor and the migrator all call. Split into hard
 // failures and warnings so a standard can be introduced without every existing
 // site failing on the day it lands.
-export async function pageStandardsFindings(html, { route = "/", origin = "", allowedImageNames = null, siteRoot = null } = {}) {
+export async function pageStandardsFindings(html, { route = "/", origin = "", allowedImageNames = null, siteRoot = null, now = new Date() } = {}) {
   const failures = [
+    // Inline rather than imported: this module is installed into customer
+    // repositories byte-for-byte, where ../src/ does not exist.
+    ...copyrightIssues(html, { year: now.getUTCFullYear() }),
     ...managedHtmlStructureIssues(html),
     ...landmarkIssues(html),
     ...styleIssues(html),
