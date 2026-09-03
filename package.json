@@ -10,6 +10,7 @@
     "check": "node --check src/worker.js && node --check public/app.js && node scripts/verify-simulator.mjs"
   },
   "devDependencies": {
+    "cheerio": "^1.1.2",
     "wrangler": "^4.80.0"
   }
 }

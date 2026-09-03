@@ -17,6 +17,7 @@
 // that should never need a judgement call. The axe WCAG gate still runs in the
 // browser for the rest.
 
+import { load } from "cheerio";
 import { access } from "node:fs/promises";
 import path from "node:path";
 
@@ -141,9 +142,36 @@ const VAGUE_LINK_TEXT = new Set([
   "click here", "here", "read more", "more", "learn more", "this link", "link", "this"
 ]);
 
+// PARSE THE PAGE, DO NOT PATTERN-MATCH IT.
+//
+// These checks decide whether a build ships and whether an edit is refused, so
+// being approximately right is not good enough. Measured across the 23 pages of
+// the three real managed sites, the regex versions disagreed with a parser on
+// three checks, and every single time the regex was the one that was wrong:
+//
+//   styleIssues counted `style="..."` inside a JavaScript string - a page that
+//   builds markup with innerHTML was reported as having five inline styles it
+//   does not have, and styleIssues is a BLOCKING failure.
+//
+//   the stylesheet check counted `<link rel="preload" as="style"
+//   onload="this.rel='stylesheet'">` as a stylesheet link, because the regex
+//   accepted rel='stylesheet' out of the onload attribute. That is the ordinary
+//   async-CSS pattern, so a correct page was told it had three stylesheets.
+//
+// A tolerant parser also matches what a browser does, which is the only opinion
+// that counts: it ignores markup inside <script>, closes what the author left
+// open, and reads attributes rather than the bytes around them.
+export function parseHtml(html) {
+  return load(String(html ?? ""));
+}
+
 export function attributeValues(html, tagName, attribute) {
-  const expression = new RegExp(`<${tagName}\\b[^>]*\\b${attribute}\\s*=\\s*(["'])(.*?)\\1`, "gis");
-  return [...String(html).matchAll(expression)].map((match) => match[2].trim());
+  const $ = parseHtml(html);
+  return $(tagName)
+    .toArray()
+    .map((element) => $(element).attr(attribute))
+    .filter((value) => typeof value === "string")
+    .map((value) => value.trim());
 }
 
 // An in-page link that lands nowhere.
@@ -158,15 +186,18 @@ export function attributeValues(html, tagName, attribute) {
 //
 // Self-contained, like the rest of this module: it ships into customer repos.
 export function fragmentLinkIssues(html) {
-  const source = String(html || "");
+  const $ = parseHtml(html);
   const ids = new Set();
-  for (const match of source.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)) ids.add(match[1]);
+  // Real ids on real elements. The pattern version also collected an id out of
+  // any string that happened to contain id="...", including inside a script.
+  $("[id]").each((index, element) => ids.add(String($(element).attr("id"))));
   // <a name="..."> is the older spelling of the same thing and still works.
-  for (const match of source.matchAll(/<a\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>/gi)) ids.add(match[1]);
+  $("a[name]").each((index, element) => ids.add(String($(element).attr("name"))));
 
   const issues = [];
   const seen = new Set();
-  for (const href of attributeValues(source, "a", "href")) {
+  const hrefs = $("a[href]").toArray().map((element) => String($(element).attr("href")).trim());
+  for (const href of hrefs) {
     if (!href.startsWith("#")) continue;
     const target = href.slice(1);
     // "#" and "#top" both mean the top of the document to a browser, with or
@@ -293,11 +324,10 @@ export function mobileOverflowIssues(html) {
 // An <img> with NO alt attribute at all is a deterministic missing-alt defect
 // (an empty alt="" is valid and deliberately allowed for decorative images).
 export function missingAltIssues(html) {
-  const issues = [];
-  for (const match of String(html).matchAll(/<img\b[^>]*>/gi)) {
-    if (!/\balt\s*=/i.test(match[0])) issues.push(`<img> without alt attribute`);
-  }
-  return issues;
+  const $ = parseHtml(html);
+  // :not([alt]) rather than testing the tag text, so an <img> written inside a
+  // script string is not counted and an alt spread across a line break is.
+  return $("img:not([alt])").toArray().map(() => "<img> without alt attribute");
 }
 
 // A form control with no accessible name: no aria-label/aria-labelledby, no
@@ -336,16 +366,22 @@ export function unlabelledControlIssues(html) {
 // WCAG-adjacent and all three are what makes a page editable: an edit that
 // targets "the main content" needs exactly one place that means.
 export function landmarkIssues(html) {
-  const source = String(html);
+  const $ = parseHtml(html);
   const issues = [];
 
-  const mains = (source.match(/<main\b/gi) || []).length;
+  // role="main" counts: it is the same landmark to a screen reader, and a page
+  // that declares one is not missing one.
+  const mains = $("main, [role=main]").length;
   if (mains !== 1) issues.push(mains ? `${mains} <main> landmarks, expected exactly 1` : "no <main> landmark");
 
-  const h1s = (source.match(/<h1\b/gi) || []).length;
+  const h1s = $("h1").length;
   if (h1s !== 1) issues.push(h1s ? `${h1s} <h1> headings, expected exactly 1` : "no <h1>");
 
-  const levels = [...source.matchAll(/<h([1-6])\b/gi)].map((match) => Number(match[1]));
+  // In document order, which is what a screen reader follows - and headings
+  // written inside a script string are not headings at all.
+  const levels = $("h1, h2, h3, h4, h5, h6")
+    .toArray()
+    .map((element) => Number(String(element.tagName || element.name).slice(1)));
   let previous = 0;
   for (const level of levels) {
     // Going deeper by more than one step leaves a gap a screen reader reads as
@@ -455,17 +491,25 @@ export function structuredDataIssues(html) {
 // up with 15kB of CSS in its head and a pinned, checksummed styles.css that the
 // page never loads.
 export function styleIssues(html) {
-  const source = String(html);
+  const $ = parseHtml(html);
   const issues = [];
 
-  const blocks = (source.match(/<style\b/gi) || []).length;
+  const blocks = $("style").length;
   if (blocks) issues.push(`${blocks} inline <style> block(s); styles belong in ${STYLESHEET_PATH}`);
 
-  const attributes = (source.match(/\sstyle\s*=\s*["']/gi) || []).length;
+  // Elements carrying the attribute, not occurrences of the text. A page that
+  // assembles markup in JavaScript contains `style="..."` inside a string, and
+  // counting those refused pages that were perfectly correct.
+  const attributes = $("[style]").length;
   if (attributes) issues.push(`${attributes} style="" attribute(s); styles belong in ${STYLESHEET_PATH}`);
 
-  const sheets = attributeValues(source, "link", "href")
-    .filter((href) => /\.css(\?|$)/i.test(href));
+  // rel is read as an attribute, so the async-CSS preload pattern - which
+  // mentions rel='stylesheet' inside its onload handler - is counted once, when
+  // it is really a stylesheet, rather than three times.
+  const sheets = $("link[rel~=stylesheet]")
+    .toArray()
+    .map((element) => String($(element).attr("href") || "").trim())
+    .filter(Boolean);
   const own = sheets.filter((href) => !/^https?:\/\//i.test(href));
   if (!own.length) issues.push(`the page does not link ${STYLESHEET_PATH}`);
   else {
@@ -545,12 +589,15 @@ export function freshenCopyrightYear(html, { year = new Date().getUTCFullYear() 
 // Core Web Vitals failure (cumulative layout shift) and the most common reason
 // a generated site feels cheap on a phone.
 export function imageDimensionIssues(html) {
+  const $ = parseHtml(html);
   const issues = [];
-  for (const match of String(html).matchAll(/<img\b[^>]*>/gi)) {
-    const tag = match[0];
-    const sized = (/\bwidth\s*=/i.test(tag) && /\bheight\s*=/i.test(tag)) || /aspect-ratio/i.test(tag);
+  $("img").each((index, element) => {
+    const image = $(element);
+    const sized = (image.attr("width") && image.attr("height"))
+      || /aspect-ratio/i.test(String(image.attr("style") || ""))
+      || /aspect-ratio/i.test(String(image.attr("class") || ""));
     if (!sized) issues.push("<img> without width/height or aspect-ratio, which will shift the layout as it loads");
-  }
+  });
   return issues;
 }
 
