@@ -146,6 +146,47 @@ export function attributeValues(html, tagName, attribute) {
   return [...String(html).matchAll(expression)].map((match) => match[2].trim());
 }
 
+// An in-page link that lands nowhere.
+//
+// localLinkIssues deliberately skips anything starting with "#" - it resolves
+// files, and a fragment is not a file. Nothing else looked at them, so on a
+// single-page site, which is ENTIRELY navigated by fragments, the whole
+// navigation bar was unverified. A customer's "About" button did nothing, and
+// every gate passed: verify-generation-output checks that each planned anchor
+// id exists in the document, but never that the links point at those ids. So
+// id="about-us" with href="#about" satisfied everything and worked for nobody.
+//
+// Self-contained, like the rest of this module: it ships into customer repos.
+export function fragmentLinkIssues(html) {
+  const source = String(html || "");
+  const ids = new Set();
+  for (const match of source.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)) ids.add(match[1]);
+  // <a name="..."> is the older spelling of the same thing and still works.
+  for (const match of source.matchAll(/<a\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>/gi)) ids.add(match[1]);
+
+  const issues = [];
+  const seen = new Set();
+  for (const href of attributeValues(source, "a", "href")) {
+    if (!href.startsWith("#")) continue;
+    const target = href.slice(1);
+    // "#" and "#top" both mean the top of the document to a browser, with or
+    // without an element to match. Everything else has to resolve.
+    if (target === "" ) {
+      if (seen.has(href)) continue;
+      seen.add(href);
+      issues.push('a link to "#", which goes nowhere');
+      continue;
+    }
+    if (target.toLowerCase() === "top") continue;
+    const decoded = (() => { try { return decodeURIComponent(target); } catch { return target; } })();
+    if (ids.has(target) || ids.has(decoded)) continue;
+    if (seen.has(href)) continue;
+    seen.add(href);
+    issues.push(`link to ${href}, which matches no id on the page`);
+  }
+  return issues;
+}
+
 export async function localLinkIssues(html, route, siteRoot = null) {
   // Without a site root there is no tree to resolve against, so link
   // existence cannot be judged - the other checks still can.
@@ -614,6 +655,7 @@ export async function pageStandardsFindings(html, { route = "/", origin = "", al
     ...styleIssues(html),
     ...documentIssues(html, { route, origin }),
     ...await localLinkIssues(html, route, siteRoot),
+    ...fragmentLinkIssues(html),
     ...formIssues(html),
     ...missingAltIssues(html),
     ...unlabelledControlIssues(html),
