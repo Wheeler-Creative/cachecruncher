@@ -118,17 +118,17 @@
   </header>
 
   <main class="container">
-    <p class="hint">
+    <p data-ww-edit="home-hint-text" data-ww-kind="multiline" data-ww-label="Paragraph" data-ww-group="Hint" data-ww-block="home-hint" class="hint">
       Enter any combination of values you know and Cache Cruncher will derive the
       bit math automatically. Once the geometry is valid, the Cache Simulator can
       step through addresses and render visual cache and memory tables.
     </p>
 
-    <form id="calcForm" autocomplete="off">
+    <form data-ww-block="home-calcform" id="calcForm" autocomplete="off">
       <div class="grid">
         <!-- Cache parameters -->
         <section class="card">
-          <h2>Cache Parameters</h2>
+          <h2 data-ww-edit="home-calcform-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Cache Parameters">Cache Parameters</h2>
 
           <div class="field with-unit">
             <label for="cache_size">Cache Size</label>
@@ -181,7 +181,7 @@
 
         <!-- Memory / Virtual Memory parameters -->
         <section class="card">
-          <h2>Memory &amp; Virtual Memory</h2>
+          <h2 data-ww-edit="home-calcform-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="Cache Parameters">Memory &amp; Virtual Memory</h2>
 
           <div class="field">
             <label for="address_size">Physical Address Space (bits)</label>
@@ -251,24 +251,24 @@
     </form>
 
     <!-- Results -->
-    <section class="results">
+    <section data-ww-block="home-results" class="results">
       <div class="grid">
         <div class="card">
-          <h2>Cache Configuration</h2>
+          <h2 data-ww-edit="home-results-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Cache Configuration">Cache Configuration</h2>
           <dl id="cacheResults" class="results-list"></dl>
         </div>
         <div class="card">
-          <h2>Memory Configuration</h2>
+          <h2 data-ww-edit="home-results-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="Cache Configuration">Memory Configuration</h2>
           <dl id="memResults" class="results-list"></dl>
         </div>
       </div>
     </section>
 
-    <section class="card simulator-card">
+    <section data-ww-block="home-cache-simulator" class="card simulator-card">
       <div class="simulator-head">
         <div>
-          <h2>Cache Simulator</h2>
-          <p class="simulator-copy">Step through addresses and keep the main view focused on translation, cache state, and TLB activity. Extra memory views stay tucked into a compact reference area.</p>
+          <h2 data-ww-edit="home-cache-simulator-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Cache Simulator">Cache Simulator</h2>
+          <p data-ww-edit="home-cache-simulator-text" data-ww-kind="multiline" data-ww-label="Paragraph" data-ww-group="Cache Simulator" class="simulator-copy">Step through addresses and keep the main view focused on translation, cache state, and TLB activity. Extra memory views stay tucked into a compact reference area.</p>
         </div>
         <div class="simulator-status" id="simStatus">Configure a valid cache geometry to start the simulator.</div>
       </div>
@@ -299,34 +299,34 @@
 
       <div class="simulator-panels simulator-summary-panels">
         <section class="sim-panel">
-          <h3>Address Translation</h3>
+          <h3 data-ww-edit="home-cache-simulator-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="Cache Simulator">Address Translation</h3>
           <div id="simTranslation" class="bit-breakdown empty-state">No address translation yet.</div>
         </section>
 
         <section class="sim-panel">
-          <h3>Instruction Breakdown</h3>
+          <h3 data-ww-edit="home-cache-simulator-heading-3" data-ww-kind="text" data-ww-label="Heading 3" data-ww-group="Cache Simulator">Instruction Breakdown</h3>
           <div id="simBreakdown" class="bit-breakdown empty-state">No access yet.</div>
         </section>
       </div>
 
       <section class="sim-panel sim-chain-panel">
-        <h3>Address Chain</h3>
+        <h3 data-ww-edit="home-cache-simulator-heading-4" data-ww-kind="text" data-ww-label="Heading 4" data-ww-group="Cache Simulator">Address Chain</h3>
         <div id="simChain" class="address-chain empty-state">No access yet.</div>
       </section>
 
       <section class="sim-panel sim-trace-panel">
-        <h3>Trace</h3>
+        <h3 data-ww-edit="home-cache-simulator-heading-5" data-ww-kind="text" data-ww-label="Heading 5" data-ww-group="Cache Simulator">Trace</h3>
         <ol id="simTrace" class="trace-list"></ol>
       </section>
 
       <div class="simulator-panels simulator-primary-panels">
         <section class="sim-panel">
-          <h3>Cache Table</h3>
+          <h3 data-ww-edit="home-cache-simulator-heading-6" data-ww-kind="text" data-ww-label="Heading 6" data-ww-group="Cache Simulator">Cache Table</h3>
           <div id="simCacheTable" class="table-shell empty-state">Cache table will appear here.</div>
         </section>
 
         <section class="sim-panel">
-          <h3>TLB Table</h3>
+          <h3 data-ww-edit="home-cache-simulator-heading-7" data-ww-kind="text" data-ww-label="Heading 7" data-ww-group="Cache Simulator">TLB Table</h3>
           <div id="simTlbTable" class="table-shell empty-state">TLB activity will appear here.</div>
         </section>
       </div>
@@ -335,21 +335,21 @@
         <summary>Page Table and Memory Blocks</summary>
         <div class="simulator-panels simulator-reference-panels">
           <section class="sim-panel">
-            <h3>Page Table</h3>
+            <h3 data-ww-edit="home-cache-simulator-heading-8" data-ww-kind="text" data-ww-label="Heading 8" data-ww-group="Cache Simulator">Page Table</h3>
             <div id="simPageTable" class="table-shell empty-state">Page table rows will appear here.</div>
           </section>
 
           <section class="sim-panel">
-            <h3>Memory Blocks</h3>
+            <h3 data-ww-edit="home-cache-simulator-heading-9" data-ww-kind="text" data-ww-label="Heading 9" data-ww-group="Cache Simulator">Memory Blocks</h3>
             <div id="simMemoryTable" class="table-shell empty-state">Memory blocks will appear here.</div>
           </section>
         </div>
       </details>
     </section>
 
-    <section class="card feedback-card">
-      <h2>How was this tool?</h2>
-      <p class="feedback-copy">Click an emoji once per session to rate the simulator. Total counts are saved across visits.</p>
+    <section data-ww-block="home-how-was-this-tool" class="card feedback-card">
+      <h2 data-ww-edit="home-how-was-this-tool-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="How was this tool?">How was this tool?</h2>
+      <p data-ww-edit="home-how-was-this-tool-text" data-ww-kind="text" data-ww-label="Paragraph" data-ww-group="How was this tool?" class="feedback-copy">Click an emoji once per session to rate the simulator. Total counts are saved across visits.</p>
       <div class="feedback-buttons">
         <button type="button" class="feedback-btn" data-feedback="love" aria-label="Flaming heart">❤️‍🔥</button>
         <button type="button" class="feedback-btn" data-feedback="death" aria-label="Death">💀</button>
@@ -361,7 +361,7 @@
       <div class="feedback-summary" id="feedbackSummary" aria-live="polite"></div>
     </section>
 
-    <details class="formulas">
+    <details data-ww-block="home-formulas" class="formulas">
       <summary>Formulas used</summary>
       <ul>
         <li><code>num_blocks = cache_size / block_size</code></li>
@@ -382,8 +382,8 @@
       </ul>
     </details>
 
-    <article class="seo-content">
-      <h2>About the Cache Cruncher Cache Simulator</h2>
+    <article data-ww-block="home-seo-content" class="seo-content">
+      <h2 data-ww-edit="home-seo-content-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="About the Cache Cruncher Cache Simulator">About the Cache Cruncher Cache Simulator</h2>
       <p>
         Cache Cruncher is a free online <strong>Cache Simulator and Memory Simulator</strong>
         designed for students taking computer architecture or computer organization
@@ -395,7 +395,7 @@
         <code>cache_size</code> and <code>num_blocks</code> recomputes.
       </p>
 
-      <h3>What can you calculate and simulate?</h3>
+      <h3 data-ww-edit="home-seo-content-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="About the Cache Cruncher Cache Simulator">What can you calculate and simulate?</h3>
       <ul>
         <li><strong>Cache configuration:</strong> number of blocks, number of sets,
           index bits, offset bits, tag bits, tag-array storage, valid-bit overhead,
@@ -409,7 +409,7 @@
           and the number of TLB rows.</li>
       </ul>
 
-      <h3>Example: a 32 KB, 4-way set-associative cache with 64-byte blocks</h3>
+      <h3 data-ww-edit="home-seo-content-heading-3" data-ww-kind="text" data-ww-label="Heading 3" data-ww-group="About the Cache Cruncher Cache Simulator">Example: a 32 KB, 4-way set-associative cache with 64-byte blocks</h3>
       <p>
         Enter <code>cache_size = 32 KB</code>, <code>block_size = 64</code>,
         <code>associativity = 4</code>, and <code>address_size = 32</code>.
@@ -417,28 +417,28 @@
         6 offset bits, and 19 tag bits — instantly, with no submit button.
       </p>
 
-      <h3>Frequently asked questions</h3>
-      <h4>How do I calculate index bits in a cache?</h4>
-      <p>Index bits = log₂(number of sets). Number of sets equals the cache size
+      <h3 data-ww-edit="home-seo-content-heading-4" data-ww-kind="text" data-ww-label="Heading 4" data-ww-group="About the Cache Cruncher Cache Simulator">Frequently asked questions</h3>
+      <h4 data-ww-edit="home-seo-content-heading-5" data-ww-kind="text" data-ww-label="Heading 5" data-ww-group="About the Cache Cruncher Cache Simulator">How do I calculate index bits in a cache?</h4>
+      <p data-ww-edit="home-seo-content-text" data-ww-kind="multiline" data-ww-label="Paragraph" data-ww-group="About the Cache Cruncher Cache Simulator">Index bits = log₂(number of sets). Number of sets equals the cache size
         divided by (block size × associativity). For a direct-mapped cache,
         associativity is 1.</p>
 
-      <h4>How do I calculate tag bits?</h4>
-      <p>Tag bits = address size − (index bits + offset bits). Offset bits =
+      <h4 data-ww-edit="home-seo-content-heading-6" data-ww-kind="text" data-ww-label="Heading 6" data-ww-group="About the Cache Cruncher Cache Simulator">How do I calculate tag bits?</h4>
+      <p data-ww-edit="home-seo-content-text-2" data-ww-kind="text" data-ww-label="Paragraph 2" data-ww-group="About the Cache Cruncher Cache Simulator">Tag bits = address size − (index bits + offset bits). Offset bits =
         log₂(block size in bytes).</p>
 
-      <h4>How do I calculate TLB tag bits?</h4>
-      <p>TLB tag bits = virtual page number bits − log₂(TLB rows), where VPN
+      <h4 data-ww-edit="home-seo-content-heading-7" data-ww-kind="text" data-ww-label="Heading 7" data-ww-group="About the Cache Cruncher Cache Simulator">How do I calculate TLB tag bits?</h4>
+      <p data-ww-edit="home-seo-content-text-3" data-ww-kind="text" data-ww-label="Paragraph 3" data-ww-group="About the Cache Cruncher Cache Simulator">TLB tag bits = virtual page number bits − log₂(TLB rows), where VPN
         bits = virtual address size − page offset bits.</p>
 
-      <h4>Is my data sent anywhere?</h4>
-      <p>No. Cache Cruncher runs entirely in your browser. There is no backend,
+      <h4 data-ww-edit="home-seo-content-heading-8" data-ww-kind="text" data-ww-label="Heading 8" data-ww-group="About the Cache Cruncher Cache Simulator">Is my data sent anywhere?</h4>
+      <p data-ww-edit="home-seo-content-text-4" data-ww-kind="multiline" data-ww-label="Paragraph 4" data-ww-group="About the Cache Cruncher Cache Simulator">No. Cache Cruncher runs entirely in your browser. There is no backend,
         no analytics, and no tracking. The Cloudflare Worker only serves the
         static HTML, CSS, and JavaScript.</p>
 
-      <h3>Support the tool</h3>
-      <p>If you like Cache Cruncher, I appreciate the support. The site already includes sponsor links at the top, and you can also connect with me on LinkedIn.</p>
-      <p><a class="linkedin-btn" href="https://www.linkedin.com/in/stevepwheeler" target="_blank" rel="noopener">LinkedIn</a></p>
+      <h3 data-ww-edit="home-seo-content-heading-9" data-ww-kind="text" data-ww-label="Heading 9" data-ww-group="About the Cache Cruncher Cache Simulator">Support the tool</h3>
+      <p data-ww-edit="home-seo-content-text-5" data-ww-kind="multiline" data-ww-label="Paragraph 5" data-ww-group="About the Cache Cruncher Cache Simulator">If you like Cache Cruncher, I appreciate the support. The site already includes sponsor links at the top, and you can also connect with me on LinkedIn.</p>
+      <p><a data-ww-edit="linkedin" data-ww-kind="url" data-ww-label="LinkedIn" data-ww-group="Contact details" data-ww-help="Where your LinkedIn link goes." data-ww-part="link" class="linkedin-btn" href="https://www.linkedin.com/in/stevepwheeler" target="_blank" rel="noopener">LinkedIn</a></p>
       <p><strong>Built by Steve Wheeler</strong> — UTSA student from 2023–2025, built while taking Professor Ortiz’s computer infrastructure class to stay engaged and learn.</p>
     </article>
   </main>

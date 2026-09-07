@@ -1,6 +1,8 @@
+import { withSiteContent } from "../scripts/site-content-worker.js";
+
 // Cache Calc — Cloudflare Worker
 // All calculations run client-side; the worker only serves static assets.
-export default {
+const siteHandler = {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/api/feedback') {
@@ -64,3 +66,11 @@ function jsonResponse(body) {
     },
   });
 }
+
+// The owner's own content, resolved while the page streams. The page already
+// contains working values, so this only ever OVERRIDES: a missing document or
+// an unreadable bucket serves exactly the page in the repository.
+export default withSiteContent(siteHandler, {
+  key: "site-content/b97ce281-ffaf-4808-b4d6-9778c1d2d95e.json",
+  binding: "MEDIA"
+});

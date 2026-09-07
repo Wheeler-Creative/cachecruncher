@@ -9,8 +9,16 @@
 	"assets": {
 		"directory": "public",
 		"binding": "ASSETS",
+		// THE WORKER HAS TO RUN FOR A PAGE. Cloudflare's asset layer answers any
+		// request matching a file and never invokes the Worker, so public/index.html
+		// was served straight from assets - which is why nothing the Worker adds to a
+		// page ever reached a browser. Scoped to pages: a stylesheet or a photograph
+		// has nothing to resolve and should not pay for a Worker invocation.
+		"run_worker_first": [ "/*", "!/*.css", "!/*.js", "!/*.mjs", "!/*.woff", "!/*.woff2" ],
 		"not_found_handling": "single-page-application"
 	},
+	// Where the portal writes this site's content document.
+	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "sharedbucket" }],
 	"routes": [
 		{
 			"pattern": "cachecruncher.com",
