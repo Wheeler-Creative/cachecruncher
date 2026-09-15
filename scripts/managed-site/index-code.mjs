@@ -5,7 +5,11 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { headers, loadConfig, repositoryMatches, requireEnvironment, restUrl } from "./lib.mjs";
 
-requireEnvironment(["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GITHUB_REPOSITORY"]);
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.log("Supabase credentials not configured in this repository; skipping index.");
+  process.exit(0);
+}
+requireEnvironment(["GITHUB_REPOSITORY"]);
 const config = await loadConfig();
 const MAX_CHUNK_CHARS = 3500;
 const CHUNK_OVERLAP_CHARS = 300;
