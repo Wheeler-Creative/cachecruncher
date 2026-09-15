@@ -99,6 +99,58 @@ function nationalPhone(value) {
 
 const trimmed = (value) => String(value ?? "").trim();
 
+// A crop is deliberately bounded presentation metadata, not a CSS escape
+// hatch. The original image is never rewritten: the owner chooses its focal
+// point and an optional bounded zoom, and the site renders that same original
+// file with CSS. Keep values as whole percentages so they are predictable in
+// the console, compact in R2, and equally safe in HTMLRewriter and Node.
+function normalizeCrop(crop) {
+  if (!crop || typeof crop !== "object") return null;
+  const point = (value) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 && number <= 100 ? Math.round(number) : null;
+  };
+  const x = point(crop.x);
+  const y = point(crop.y);
+  // A stored owner selection is one deliberate point. Reject a malformed
+  // half-selection rather than silently turning it into a different crop.
+  if (x === null || y === null) return null;
+  const rawZoom = crop.zoom === undefined ? 100 : Number(crop.zoom);
+  const zoom = Number.isFinite(rawZoom) && rawZoom >= 100 && rawZoom <= 250
+    ? Math.round(rawZoom)
+    : null;
+  return zoom === null ? null : { x, y, zoom };
+}
+
+function cropStyle(crop) {
+  return crop ? `object-position:${crop.x}% ${crop.y}%` : "";
+}
+
+function mergedCropStyle(existing, crop) {
+  const override = cropStyle(crop);
+  if (!override) return "";
+  // A source can already carry sizing, transforms, or a background treatment
+  // inline. The crop control changes only the focal point; it may not erase
+  // those declarations when the Worker resolves the owner's photo.
+  const declarations = String(existing || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const transform = declarations.find((part) => /^transform\s*:/i.test(part));
+  const preserved = declarations.filter((part) => !/^object-position\s*:/i.test(part) && !/^transform\s*:/i.test(part));
+  // A zoom is CSS only. If the source already transformed the image, retain
+  // that transform and append scale rather than replacing it.
+  const zoom = Number(crop.zoom || 100) / 100;
+  const sourceTransform = transform ? transform.replace(/^transform\s*:\s*/i, "") : "";
+  if (zoom !== 1) {
+    preserved.push(`transform:${sourceTransform ? `${sourceTransform} ` : ""}scale(${zoom})`);
+    preserved.push(`transform-origin:${crop.x}% ${crop.y}%`);
+  } else if (transform) {
+    preserved.push(transform);
+  }
+  return [...preserved, override].join(";");
+}
+
 // Attributes for markup this file writes itself. Escaped, because the values
 // come from a content document somebody typed into.
 function attributeText(name, value) {
@@ -156,6 +208,17 @@ export const KINDS = Object.freeze({
     // than leaving them.
     render: (value) => ({ href: trimmed(value) })
   },
+  date: {
+    editor: "date",
+    normalize: (value) => {
+      const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(value || "").trim());
+      return match ? match[1] : String(value || "").trim();
+    },
+    render: (value) => {
+      const v = String(value || "").trim();
+      return { text: v, until: v };
+    }
+  },
   image: {
     editor: "image",
     // A file this site has, resolved to the path its own worker serves.
@@ -199,7 +262,8 @@ export function parseContent(text) {
     // An image is a file name, and this becomes a path on the site from a
     // request body: a name that could climb out of the media prefix is refused.
     if (kind === "image" && (value.includes("/") || value.includes(".."))) continue;
-    values[id] = kind ? { value, kind } : { value };
+    const crop = kind === "image" ? normalizeCrop(entry?.crop) : null;
+    values[id] = kind ? { value, kind, ...(crop ? { crop } : {}) } : { value };
   }
   return { version: CONTENT_VERSION, values };
 }
@@ -222,9 +286,85 @@ export function parseContent(text) {
 // request is marked noindex so a crawler never sees an outlined page.
 const HIGHLIGHT_ID = "ww-here";
 export const PREVIEW_STYLE = `<style data-ww-preview="1">
-[data-ww-highlight]{outline:3px solid #2f6df6 !important;outline-offset:3px;scroll-margin-top:120px;}
+[data-ww-highlight]{outline:3px solid #2f6df6 !important;outline-offset:4px !important;box-shadow:0 0 0 6px rgba(47, 109, 246, 0.28) !important;border-radius:3px !important;scroll-margin-top:140px !important;scroll-margin-bottom:140px !important;transition:outline 0.15s ease, box-shadow 0.15s ease !important;}
 #${HIGHLIGHT_ID}{display:block;position:relative;top:-110px;height:0;visibility:hidden;}
-</style>`;
+#page-loader, .page-loader, #loader, .loader, [data-page-loader], [data-loader], .site-loader, .intro-loader, .mobile-loader-dancer { display: none !important; opacity: 0 !important; pointer-events: none !important; visibility: hidden !important; }
+img.image-placeholder { border: none !important; background: none !important; min-height: 0 !important; padding: 0 !important; margin: 0 !important; }
+[${EDIT_ATTRIBUTE}] { cursor: pointer; }
+[${EDIT_ATTRIBUTE}]:hover { outline: 2px dashed rgba(47, 109, 246, 0.6) !important; outline-offset: 2px; }
+</style>
+<script data-ww-preview-bridge="1">
+(function() {
+  if (window.self === window.top) return;
+
+  function highlightSlot(id) {
+    if (!id) return;
+    var prev = document.querySelectorAll('[data-ww-highlight]');
+    for (var i = 0; i < prev.length; i++) {
+      prev[i].removeAttribute('data-ww-highlight');
+    }
+    var all = document.querySelectorAll('[' + ${JSON.stringify(EDIT_ATTRIBUTE)} + ']');
+    var target = null;
+    for (var j = 0; j < all.length; j++) {
+      if (all[j].getAttribute(${JSON.stringify(EDIT_ATTRIBUTE)}) === id) {
+        target = all[j];
+        break;
+      }
+    }
+    if (target) {
+      target.setAttribute('data-ww-highlight', '1');
+      try {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      } catch (err) {
+        try { target.scrollIntoView(); } catch (e) {}
+      }
+      try {
+        window.parent.postMessage({ type: 'ww-highlighted', id: id }, '*');
+      } catch (e) {}
+    }
+  }
+
+  function initBridge() {
+    var params = new URLSearchParams(window.location.search);
+    var slot = params.get('ww-slot');
+    if (slot) {
+      highlightSlot(slot);
+      setTimeout(function() { highlightSlot(slot); }, 200);
+      setTimeout(function() { highlightSlot(slot); }, 650);
+    }
+    try {
+      window.parent.postMessage({ type: 'ww-bridge-ready', slot: slot, route: window.location.pathname }, '*');
+    } catch (err) {}
+  }
+
+  document.addEventListener('click', function(e) {
+    var target = e.target.closest('[' + ${JSON.stringify(EDIT_ATTRIBUTE)} + ']');
+    if (!target) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var id = target.getAttribute(${JSON.stringify(EDIT_ATTRIBUTE)});
+    highlightSlot(id);
+    try {
+      window.parent.postMessage({ type: 'ww-select-field', id: id }, '*');
+    } catch (err) {}
+  }, true);
+
+  window.addEventListener('message', function(e) {
+    if (!e.data || e.data.type !== 'ww-highlight') return;
+    highlightSlot(e.data.id);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initBridge);
+  } else {
+    initBridge();
+  }
+  window.addEventListener('load', function() {
+    var slot = new URLSearchParams(window.location.search).get('ww-slot');
+    if (slot) highlightSlot(slot);
+  });
+})();
+</script>`;
 
 export function contentTransforms(content, { highlight = "", preview = null } = {}) {
   const resolved = parseContent(content);
@@ -249,7 +389,7 @@ export function contentTransforms(content, { highlight = "", preview = null } = 
       // the element, so a preview cannot ask for a value to be resolved by
       // rules meant for something else.
       const stored = preview && String(id) === String(preview.id)
-        ? { value: preview.value }
+        ? { value: preview.value, crop: normalizeCrop(preview.crop) }
         : resolved.values[String(id)];
       if (!stored) return;
 
@@ -267,8 +407,10 @@ export function contentTransforms(content, { highlight = "", preview = null } = 
         element.setAttribute("href", rendered.href);
       }
       if (rendered.src) {
+        const style = mergedCropStyle(element.getAttribute("style"), stored.crop);
         if (element.tagName === "img") {
           element.setAttribute("src", rendered.src);
+          if (style) element.setAttribute("style", style);
           if (rendered.alt) element.setAttribute("alt", rendered.alt);
         } else {
           // An unfilled slot is a neutral <div role="img">, so filling it means
@@ -298,9 +440,18 @@ export function contentTransforms(content, { highlight = "", preview = null } = 
           element.replace(
             `<img ${attributeText(EDIT_ATTRIBUTE, id)} ${attributeText(KIND_ATTRIBUTE, kind)}${carried}`
             + `${classes ? ` ${attributeText("class", classes)}` : ""}`
-            + ` ${attributeText("src", rendered.src)} ${attributeText("alt", described)} loading="lazy">`,
+            + ` ${attributeText("src", rendered.src)} ${attributeText("alt", described)}`
+            + `${style ? ` ${attributeText("style", style)}` : ""} loading="lazy">`,
             { html: true }
           );
+          return;
+        }
+      }
+      if (kind === "date") {
+        if (rendered.until && element.getAttribute("data-ww-until") !== null) {
+          element.setAttribute("data-ww-until", rendered.until);
+        }
+        if (part === "attr" || (element.getAttribute("data-ww-until") !== null && part !== "text" && part !== "both")) {
           return;
         }
       }
@@ -330,6 +481,7 @@ export function declaredFields(references) {
       help: "",
       group: "",
       shape: "",
+      until: reference.until || "",
       current: "",
       places: [],
       routes: new Set()
@@ -340,6 +492,7 @@ export function declaredFields(references) {
     if (!field.help && reference.help) field.help = reference.help;
     if (!field.group && reference.group) field.group = reference.group;
     if (!field.shape && reference.shape) field.shape = reference.shape;
+    if (!field.until && reference.until) field.until = reference.until;
     if (!field.current && reference.current) field.current = reference.current;
     field.places.push({ route: reference.route, part: reference.part || "text" });
     if (reference.route) field.routes.add(reference.route);
