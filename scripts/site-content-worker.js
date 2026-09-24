@@ -94,15 +94,56 @@ export function previewFrom(request) {
     const highlight = String(params.get("ww-slot") || "").slice(0, 80);
     if (!highlight) return {};
     const trying = params.get("ww-try");
+    const cropPoint = (name) => {
+      const value = Number(params.get(name));
+      return Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : null;
+    };
+    const x = cropPoint("ww-crop-x");
+    const y = cropPoint("ww-crop-y");
+    const rawZoom = Number(params.get("ww-crop-zoom"));
+    const zoom = Number.isFinite(rawZoom) && rawZoom >= 100 && rawZoom <= 250 ? Math.round(rawZoom) : 100;
+    const crop = x === null || y === null ? null : { x, y, zoom };
     return {
       highlight,
       // One value, for one response, for the slot being looked at. It cannot
       // name a different field, and the kind still comes from the page.
-      preview: trying === null ? null : { id: highlight, value: String(trying).slice(0, 200) }
+      preview: trying === null ? null : {
+        id: highlight,
+        value: String(trying).slice(0, 200),
+        ...(crop ? { crop } : {})
+      }
     };
   } catch {
     return {};
   }
+}
+
+// The owner portal is a different, trusted origin from every managed site.
+// Most sites deliberately send X-Frame-Options: SAMEORIGIN, which is exactly
+// what a public page should do, but it also makes the portal's read-only
+// `?ww-slot=` frame blank. Relax framing *only* for that no-store preview
+// response; it has no authenticated controls or mutations and is explicitly
+// excluded from search. `frame-ancestors` is the modern, origin-specific
+// control; X-Frame-Options cannot name an allowlisted origin, so it must be
+// removed for this one response.
+export const PORTAL_FRAME_ANCESTORS = "https://jaybirddigital.com https://www.jaybirddigital.com https://wheelerswebsites.com https://www.wheelerswebsites.com";
+
+export function previewContentSecurityPolicy(existing = "") {
+  const directives = String(existing || "")
+    .split(";")
+    .map((directive) => directive.trim())
+    .filter((directive) => directive && !/^frame-ancestors(?:\s|$)/i.test(directive));
+  directives.push(`frame-ancestors ${PORTAL_FRAME_ANCESTORS}`);
+  return directives.join("; ");
+}
+
+export function markPreviewResponse(response) {
+  const marked = new Response(response.body, response);
+  marked.headers.set("x-robots-tag", "noindex, nofollow");
+  marked.headers.set("cache-control", "no-store");
+  marked.headers.delete("x-frame-options");
+  marked.headers.set("content-security-policy", previewContentSecurityPolicy(marked.headers.get("content-security-policy")));
+  return marked;
 }
 
 export function withSiteContent(handler, options = {}) {
@@ -119,10 +160,7 @@ export function withSiteContent(handler, options = {}) {
       if (!preview.highlight) return resolved;
       // A page with an outline drawn on it is not the page: never index it,
       // and never let a cache serve it to somebody who did not ask for it.
-      const marked = new Response(resolved.body, resolved);
-      marked.headers.set("x-robots-tag", "noindex, nofollow");
-      marked.headers.set("cache-control", "no-store");
-      return marked;
+      return markPreviewResponse(resolved);
     }
   };
 }

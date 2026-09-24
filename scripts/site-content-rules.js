@@ -314,7 +314,7 @@ img.image-placeholder { border: none !important; background: none !important; mi
     if (target) {
       target.setAttribute('data-ww-highlight', '1');
       try {
-        target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        target.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'nearest' });
       } catch (err) {
         try { target.scrollIntoView(); } catch (e) {}
       }
@@ -337,20 +337,24 @@ img.image-placeholder { border: none !important; background: none !important; mi
     } catch (err) {}
   }
 
+  // Editable areas select their matching field; all other clicks and links stay inert.
   document.addEventListener('click', function(e) {
-    var target = e.target.closest('[' + ${JSON.stringify(EDIT_ATTRIBUTE)} + ']');
-    if (!target) return;
+    var node = e.target && e.target.nodeType === 1 ? e.target : e.target && e.target.parentElement;
+    var target = node && node.closest
+      ? node.closest('[' + ${JSON.stringify(EDIT_ATTRIBUTE)} + ']') : null;
     e.preventDefault();
     e.stopPropagation();
+    if (!target) return;
     var id = target.getAttribute(${JSON.stringify(EDIT_ATTRIBUTE)});
+    if (!id) return;
     highlightSlot(id);
     try {
-      window.parent.postMessage({ type: 'ww-select-field', id: id }, '*');
+      window.parent.postMessage({ type: 'ww-select-field', id: id, route: window.location.pathname }, '*');
     } catch (err) {}
   }, true);
 
   window.addEventListener('message', function(e) {
-    if (!e.data || e.data.type !== 'ww-highlight') return;
+    if (e.source !== window.parent || !e.data || e.data.type !== 'ww-highlight') return;
     highlightSlot(e.data.id);
   });
 
