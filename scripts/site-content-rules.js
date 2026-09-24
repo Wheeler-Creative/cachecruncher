@@ -348,8 +348,15 @@ img.image-placeholder { border: none !important; background: none !important; mi
     var id = target.getAttribute(${JSON.stringify(EDIT_ATTRIBUTE)});
     if (!id) return;
     highlightSlot(id);
+    var bounds = target.getBoundingClientRect();
     try {
-      window.parent.postMessage({ type: 'ww-select-field', id: id, route: window.location.pathname }, '*');
+      window.parent.postMessage({
+        type: 'ww-select-field',
+        id: id,
+        route: window.location.pathname,
+        rect: { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height },
+        viewport: { width: window.innerWidth, height: window.innerHeight }
+      }, '*');
     } catch (err) {}
   }, true);
 
