@@ -256,6 +256,10 @@ export function parseContent(text) {
     if (typeof raw !== "string") continue;
     const kind = typeof entry === "object" && isKnownKind(entry?.kind) ? entry.kind : null;
     const value = ((kind && KINDS[kind].normalize?.(raw)) ?? raw).trim();
+    if (!value && entry?.clear === true && (kind === "text" || kind === "multiline")) {
+      values[id] = { value: "", kind, clear: true };
+      continue;
+    }
     // An empty string is not "no opinion", it is a value nobody set, and
     // resolving it would blank out the page's own working fallback.
     if (!value) continue;
@@ -466,7 +470,7 @@ export function contentTransforms(content, { highlight = "", preview = null } = 
           return;
         }
       }
-      if ((part === "text" || part === "both") && typeof rendered.text === "string" && rendered.text) {
+      if ((part === "text" || part === "both") && typeof rendered.text === "string" && (rendered.text || stored.clear)) {
         element.setInnerContent(rendered.text);
       }
     }
