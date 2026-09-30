@@ -924,3 +924,19 @@ button:disabled {
     width: 100%;
   }
 }
+
+/* ww-header-layout */
+body .site-header{position:relative!important;inset-block-start:auto!important;margin-block-end:0}body .site-header[data-ww-header-pinned]{position:sticky!important;inset-block-start:0!important;z-index:1000}[data-ww-header-backdrop]{inset-block-start:calc(-1 * var(--ww-header-height, 6rem))!important;height:calc(100% + var(--ww-header-height, 6rem))!important;pointer-events:none}:has(>[data-ww-header-backdrop]){overflow:visible!important}
+
+/* ww-mobile-header-layout */
+[data-ww-mobile-language-links]{display:none!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-header-row]{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;justify-content:stretch!important;gap:.75rem!important;min-width:0;width:100%;box-sizing:border-box}
+.site-header[data-ww-mobile-header] [data-ww-mobile-header-row]>.nav-toggle{grid-column:2;grid-row:1;justify-self:end!important;margin-inline-start:auto!important;margin-inline-end:0!important;min-width:44px;min-height:44px;float:none!important;position:relative!important;inset:auto!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-header-row]>:is([class*="brand"],[class*="logo"],a:first-child){grid-column:1;grid-row:1;min-width:0;max-width:100%;justify-self:start!important;text-align:start!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-nav-root]{grid-column:1/-1;grid-row:2;width:100%!important;min-width:0;margin:0!important;position:static!important;inset:auto!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-nav-root]:not([data-ww-open]):not(:has([data-ww-open])){display:none!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-nav-root]:is([data-ww-open],:has([data-ww-open])){display:block!important}
+.site-header[data-ww-mobile-header] [data-ww-mobile-nav-panel][data-ww-open]{position:static!important;inset:auto!important;width:100%!important;max-width:100%!important;box-sizing:border-box}
+.site-header[data-ww-mobile-header] [data-ww-mobile-language-links]{display:flex!important;flex-wrap:wrap;gap:.75rem;list-style:none;margin-block-start:.75rem;padding-block-start:.75rem;border-block-start:1px solid currentColor}
+.site-header[data-ww-mobile-header] .ww-mobile-language-link{display:flex!important;align-items:center;min-height:44px;visibility:visible!important;color:inherit;white-space:normal;text-decoration:underline;text-underline-offset:.2em}
+

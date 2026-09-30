@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "defaults": {
+    "htmlAttributes": {
+      "lang": "en"
+    },
+    "bodyAttributes": {}
+  },
+  "headNodes": {
+    "9c6997298b932e524301e39e": "<title>Cache Cruncher: Cache Simulator & Memory Simulator</title>",
+    "627f3f7090b3059456901471": "<meta name=\"description\" content=\"Free online Cache Simulator and Memory Simulator for computer architecture students.\" />",
+    "2dbf3655994821d096a87ac9": "<link rel=\"canonical\" href=\"https://cachecruncher.com/\" />",
+    "40f27aa6a39507a6c2fab995": "<script type=\"application/ld+json\">\n  {\n    \"@context\": \"https://schema.org\",\n    \"@graph\": [\n      {\n        \"@type\": \"WebApplication\",\n        \"name\": \"Cache Cruncher\",\n        \"url\": \"https://cachecruncher.com/\",\n        \"applicationCategory\": \"EducationalApplication\",\n        \"operatingSystem\": \"Any (web browser)\",\n        \"browserRequirements\": \"Requires JavaScript\",\n        \"description\": \"Interactive Cache Simulator and Memory Simulator for cache configuration, memory addressing, virtual memory pages, page tables, TLB bits, and visual address mapping.\",\n        \"offers\": { \"@type\": \"Offer\", \"price\": \"0\", \"priceCurrency\": \"USD\" },\n        \"isAccessibleForFree\": true,\n        \"audience\": { \"@type\": \"EducationalAudience\", \"educationalRole\": \"student\" },\n        \"featureList\": [\n          \"Cache Simulator with visual cache table\",\n          \"Memory Simulator with address-to-block mapping\",\n          \"Index, tag, and offset bit derivation\",\n          \"Direct-mapped and set-associative cache math\",\n          \"Virtual and physical page calculator\",\n          \"Page table size estimator\",\n          \"TLB tag and index bits\",\n          \"Bidirectional auto-fill — type either side of an equation\"\n        ]\n      },\n      {\n        \"@type\": \"FAQPage\",\n        \"mainEntity\": [\n          {\n            \"@type\": \"Question\",\n            \"name\": \"How do you calculate cache index bits?\",\n            \"acceptedAnswer\": {\n              \"@type\": \"Answer\",\n              \"text\": \"Index bits = log2(number of sets). Number of sets = cache size / (block size × associativity). Cache Cruncher computes this automatically as you type.\"\n            }\n          },\n          {\n            \"@type\": \"Question\",\n            \"name\": \"How do you calculate cache tag bits?\",\n            \"acceptedAnswer\": {\n              \"@type\": \"Answer\",\n              \"text\": \"Tag bits = address size − (index bits + offset bits), where offset bits = log2(block size in bytes).\"\n            }\n          },\n          {\n            \"@type\": \"Question\",\n            \"name\": \"How do you calculate TLB tag bits?\",\n            \"acceptedAnswer\": {\n              \"@type\": \"Answer\",\n              \"text\": \"TLB tag bits = virtual page number bits − log2(TLB rows). VPN bits = virtual address size − page offset bits.\"\n            }\n          },\n          {\n            \"@type\": \"Question\",\n            \"name\": \"Is Cache Cruncher free?\",\n            \"acceptedAnswer\": {\n              \"@type\": \"Answer\",\n              \"text\": \"Yes. Cache Cruncher is a free, open-source web app that runs entirely in your browser. No account, no tracking, no server-side calculation.\"\n            }\n          }\n        ]\n      }\n    ]\n  }\n  </script>",
+    "682f7b28bc50f1051d50f336": "<script type=\"application/ld+json\">{\"@context\":\"https://schema.org\",\"@type\":\"Organization\",\"name\":\"Cache Cruncher\",\"sameAs\":[\"https://www.linkedin.com/in/stevepwheeler\"]}</script>"
+  },
+  "pages": {
+    "/": {
+      "head": [
+        "9c6997298b932e524301e39e",
+        "627f3f7090b3059456901471",
+        "2dbf3655994821d096a87ac9",
+        "40f27aa6a39507a6c2fab995",
+        "682f7b28bc50f1051d50f336"
+      ]
+    }
+  }
+}
