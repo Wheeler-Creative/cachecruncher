@@ -52,6 +52,7 @@ jobs:
         run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
       - name: Validate approved branch
         run: |
+          npm run build --if-present
           npm run build:data --if-present
           npm run check --if-present
           node --check src/worker.js
@@ -78,6 +79,7 @@ jobs:
           git fetch origin main
           git checkout -B main origin/main
           if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+          npm run build --if-present
           npm run build:data --if-present
           npx wrangler deploy --keep-vars
       - name: Mark deployed

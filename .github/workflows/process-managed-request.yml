@@ -83,7 +83,9 @@ jobs:
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: node scripts/managed-site/process-request.mjs
       - name: Build generated site data
-        run: npm run build:data --if-present
+        run: |
+          npm run build --if-present
+          npm run build:data --if-present
       - name: Run repository quality checks
         run: |
           npm run lint --if-present
