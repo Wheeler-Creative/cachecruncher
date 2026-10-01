@@ -147,6 +147,7 @@ jobs:
           # never carried this site's bindings, and every preview of it answered
           # 404 for anything they served.
           PREVIEW_WORKER_NAME="$preview_name" node scripts/managed-site/preview-config.mjs
+          npm run build --if-present
           npx wrangler deploy --config wrangler.preview.generated.jsonc | tee deploy-output.txt
           preview_url=$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' deploy-output.txt | tail -n 1)
           test -n "$preview_url"
