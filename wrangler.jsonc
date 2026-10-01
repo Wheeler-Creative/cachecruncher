@@ -7,7 +7,7 @@
 		"enabled": true
 	},
 	"assets": {
-		"directory": "public",
+		"directory": "dist",
 		"binding": "ASSETS",
 		// THE WORKER HAS TO RUN FOR A PAGE. Cloudflare's asset layer answers any
 		// request matching a file and never invokes the Worker, so public/index.html

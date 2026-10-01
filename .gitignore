@@ -4,3 +4,7 @@ node_modules/
 .DS_Store
 *.log
 dist/
+/node_modules/
+
+# Generated deployment output; edit public/ content and layout/ sources.
+/dist/
