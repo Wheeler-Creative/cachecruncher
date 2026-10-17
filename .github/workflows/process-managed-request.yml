@@ -44,7 +44,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MANAGED_SITE_GITHUB_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
         run: >-
@@ -165,7 +165,7 @@ jobs:
       - name: Deploy isolated preview
         id: preview
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
         run: |
@@ -218,7 +218,7 @@ jobs:
       - name: Remove rejected preview
         if: ${{ failure() && steps.preview.outputs.name != '' }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
         # --name, not a positional: the bare form makes wrangler enumerate
