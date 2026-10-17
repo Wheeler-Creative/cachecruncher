@@ -1164,12 +1164,17 @@ async function handleContact(request, env, ctx) {
     ctx.waitUntil((platformDelivery
       ? deliverThroughPlatform(env, result.email, "").then((outcome) => {
         if (outcome.delivered || !outcome.fallback || !CONTACT_CONFIGURED || !env.EMAIL) return outcome.delivered ? null : Promise.reject(new Error("not delivered"));
-        console.error(JSON.stringify({ event: "contact_platform_unavailable" }));
+        console.error(JSON.stringify({ event: "contact_platform_fallback", detail: String(outcome.detail || "").slice(0, 120) }));
         return deliverContactEmail(env, result.email);
       })
       : deliverContactEmail(env, result.email)).catch(() => console.error(JSON.stringify({ event: "contact_delivery_failed" }))));
   }
   return contactResponse(result, request, result.status, env);
+}
+
+async function formTokenKey(token) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token))));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 12);
 }
 
 async function deliverThroughPlatform(env, email, proof) {
@@ -1181,7 +1186,10 @@ async function deliverThroughPlatform(env, email, proof) {
         email: { subject: email.subject, text: email.text, html: email.html, replyTo: email.replyTo } })
     });
     const body = await response.json().catch(() => ({}));
-    return { delivered: response.ok && body.delivered === true, via: body.via, detail: body.detail, fallback: response.status >= 500 };
+    // Anything short of a confirmed delivery falls back to the site's own send when it has one: a stale token, an
+    // outage or a refusal must never lose a visitor's message. The platform replaces a stale token within the hour.
+    const delivered = response.ok && body.delivered === true;
+    return { delivered, via: body.via, detail: body.detail, fallback: !delivered };
   } catch {
     return { delivered: false, fallback: true, detail: "The platform could not be reached." };
   }
@@ -1325,7 +1333,95 @@ const { serveShippingPlanPage, proxyShippingPlan, shippingPlanSession } = (funct
   return { serveShippingPlanPage, proxyShippingPlan, shippingPlanSession };
 })({ readCommerceSnapshot, escapeStoreHtml, siteId: CONTACT_SITE_ID, siteName: STORE_SITE_NAME, platformOrigin: COMMERCE_PLATFORM_ORIGIN });
 
-const siteHandler = {
+// The website's icon (docs/site-icon.md): the picture the owner chose, or the website's initials on its own button
+// colour, drawn here. The choice is a small public record in storage, read at most once a minute, so it takes effect
+// without a new version of this code. A page that already names an icon keeps it unless the owner chose one.
+let siteIconCache = null;
+async function siteIconSettings(env) {
+  if (siteIconCache && Date.now() - siteIconCache.at < 60000) return siteIconCache.value;
+  let value = null;
+  try {
+    const object = env.MEDIA ? await env.MEDIA.get("site-integrations/" + CONTACT_SITE_ID + "/icon.json") : null;
+    value = object ? await object.json() : null;
+  } catch { value = null; }
+  siteIconCache = { at: Date.now(), value };
+  return value;
+}
+function siteIconInitials(name) {
+  const words = String(name || "").replace(/[^\p{L}\p{N}\s&-]/gu, " ").split(/[\s&-]+/).filter(Boolean);
+  const meaningful = words.filter((word) => !/^(?:the|a|an|of|and|de|la|le|el)$/i.test(word));
+  const use = meaningful.length ? meaningful : words;
+  if (!use.length) return "W";
+  if (use.length === 1) return use[0].slice(0, use[0].length > 4 ? 2 : 1).toUpperCase();
+  return (use[0][0] + use[1][0]).toUpperCase();
+}
+function siteIconSvg(settings) {
+  const colour = (value, fallback) => (/^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : fallback);
+  const initials = String((settings && settings.initials) || siteIconInitials(CONTACT_SITE_LABEL)).replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2) || "W";
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="' + colour(settings && settings.background, "#1f2933") + '"/>'
+    + '<text x="32" y="32" dy=".35em" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-weight="700" font-size="' + (initials.length > 1 ? 28 : 36) + '" fill="'
+    + colour(settings && settings.color, "#ffffff") + '">' + initials + '</text></svg>';
+}
+async function serveSiteIcon(env, size) {
+  const settings = await siteIconSettings(env);
+  if (settings && settings.mediaPath && env.MEDIA) {
+    const key = MEDIA_PREFIX + String(settings.mediaPath).replace(/^\/+/, "");
+    const object = await env.MEDIA.get(key);
+    if (object) {
+      try {
+        if (!env.IMAGES) throw new Error("no images binding");
+        const result = await env.IMAGES.input(object.body).transform({ width: size, height: size, fit: "cover" }).output({ format: "image/png" });
+        const response = result.response();
+        response.headers.set("cache-control", "public, max-age=3600");
+        return response;
+      } catch {
+        const original = await env.MEDIA.get(key);
+        if (original) {
+          const headers = new Headers({ "cache-control": "public, max-age=3600" });
+          if (original.httpMetadata && original.httpMetadata.contentType) headers.set("content-type", original.httpMetadata.contentType);
+          return new Response(original.body, { headers });
+        }
+      }
+    }
+  }
+  return new Response(siteIconSvg(settings), { headers: { "content-type": "image/svg+xml; charset=utf-8", "cache-control": "public, max-age=3600" } });
+}
+function withSiteIcon(handler) {
+  return {
+    async fetch(request, env, ctx) {
+      const url = new URL(request.url);
+      if (url.pathname === "/_ww/icon" && (request.method === "GET" || request.method === "HEAD")) {
+        const size = Math.min(256, Math.max(16, parseInt(url.searchParams.get("size") || "64", 10) || 64));
+        return serveSiteIcon(env, size);
+      }
+      if (url.pathname === "/favicon.ico" && request.method === "GET") {
+        const settings = await siteIconSettings(env);
+        if (settings && settings.mediaPath) return serveSiteIcon(env, 48);
+      }
+      const response = await handler.fetch(request, env, ctx);
+      if (request.method !== "GET" || response.status !== 200 || typeof HTMLRewriter === "undefined"
+        || !String(response.headers.get("content-type") || "").includes("text/html")) return response;
+      const settings = await siteIconSettings(env);
+      const chosen = Boolean(settings && settings.mediaPath);
+      const version = encodeURIComponent(String((settings && settings.updatedAt) || "1"));
+      let hasIcon = false;
+      return new HTMLRewriter()
+        .on("link[rel]", { element(element) {
+          if (!/icon/i.test(element.getAttribute("rel") || "")) return;
+          if (chosen) element.remove(); else hasIcon = true;
+        } })
+        .on("head", { element(element) {
+          element.onEndTag((end) => {
+            if (chosen) end.before('<link rel="icon" href="/_ww/icon?v=' + version + '"><link rel="apple-touch-icon" href="/_ww/icon?size=180&v=' + version + '">', { html: true });
+            else if (!hasIcon) end.before('<link rel="icon" href="/_ww/icon?v=' + version + '">', { html: true });
+          });
+        } })
+        .transform(response);
+    }
+  };
+}
+
+const siteRequestHandler = {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     // This site's own server code (src/site-routes.js) answers first; everything it passes on is the platform's.
@@ -1344,6 +1440,8 @@ const siteHandler = {
         contactForm: CONTACT_CONFIGURED,
         formDelivery: 1,
         platformDelivery: Boolean(env.WW_FORM_DELIVERY_TOKEN),
+        // A short key of the token, so the platform can tell a stale one and replace it; it reveals nothing usable.
+        ...(env.WW_FORM_DELIVERY_TOKEN ? { platformDeliveryKey: await formTokenKey(env.WW_FORM_DELIVERY_TOKEN) } : {}),
         turnstileEnabled: Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY),
         siteApi: SITE_API_PREFIX
       }, {
@@ -1474,6 +1572,9 @@ const siteHandler = {
     return canonical;
   }
 };
+
+// Every request passes the icon first (src/site-icon.js on the platform writes what it reads).
+const siteHandler = withSiteIcon(siteRequestHandler);
 
 // The owner's own content, resolved while the page streams.
 //
