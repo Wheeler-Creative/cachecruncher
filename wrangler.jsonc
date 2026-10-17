@@ -2,6 +2,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cachecruncher",
   "main": "src/worker.js",
+  // Served on workers.dev as well as the custom domain: the platform verifies every upgrade and shows "live" links there.
+  "workers_dev": true,
   "compatibility_date": "2026-08-06",
   "observability": {
     "enabled": true
