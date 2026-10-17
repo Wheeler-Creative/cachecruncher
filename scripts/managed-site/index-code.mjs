@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { headers, loadConfig, repositoryMatches, requireEnvironment, restUrl } from "./lib.mjs";
+import { headers, loadConfig, requireEnvironment, restUrl, waitForRepositoryRegistration } from "./lib.mjs";
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.log("Supabase credentials not configured in this repository; skipping index.");
@@ -60,13 +60,29 @@ function chunksFor(filePath, content, repositoryId, commit) {
   return chunks;
 }
 
-async function findRepository() {
-  const response = await fetch(restUrl("site_repositories", "?select=id,repo_slug"), { headers: headers() });
-  if (!response.ok) throw new Error(`Unable to load repository registration: ${await response.text()}`);
-  const repositories = await response.json();
-  const repository = repositories.find((item) => repositoryMatches(config, item.repo_slug));
-  if (!repository) throw new Error(`No site repository registration matches ${config.repository}`);
-  return repository;
+async function findRepository({
+  attempts = Number(process.env.INDEX_REGISTRATION_ATTEMPTS || 12),
+  waitMs = Number(process.env.INDEX_REGISTRATION_WAIT_MS || 5000)
+} = {}) {
+  // A new repository's first push starts this workflow immediately. The build
+  // coordinator registers it after consuming site.assemble's completed result,
+  // so this action can reach Supabase before that coordinator pass does.
+  // Wait through that bounded handoff instead of failing a successful build.
+  const repository = await waitForRepositoryRegistration({
+    config,
+    attempts,
+    waitMs,
+    load: async () => {
+      const response = await fetch(restUrl("site_repositories", "?select=id,repo_slug"), { headers: headers() });
+      if (!response.ok) throw new Error(`Unable to load repository registration: ${await response.text()}`);
+      return response.json();
+    },
+    onWait: (attempt) => {
+      console.log(`Repository registration is not visible yet; waiting (${attempt}/${attempts})`);
+    }
+  });
+  if (repository) return repository;
+  throw new Error(`No site repository registration matches ${config.repository} after ${attempts} checks`);
 }
 
 async function indexAvailable() {

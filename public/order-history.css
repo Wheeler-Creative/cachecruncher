@@ -1,0 +1,22 @@
+.ww-orders-body{margin:0;background:var(--paper,#fff);color:var(--ink,#191c21);line-height:1.5;letter-spacing:0}
+.ww-orders-header,.ww-order-history{width:min(960px,calc(100% - 32px));margin:0 auto;box-sizing:border-box}
+.ww-orders-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:20px 0;border-bottom:1px solid #d8dee0;flex-wrap:wrap}
+.ww-orders-header a{color:inherit;text-decoration:underline;overflow-wrap:anywhere}
+main.ww-order-history{display:block;padding:28px 0;min-height:60vh}
+.ww-order-history h1{font-size:1.6rem;line-height:1.2;margin:0 0 24px;letter-spacing:0}
+.ww-order-history button,.ww-order-history input{font:inherit;border:1px solid #8b9599;border-radius:4px;box-sizing:border-box;min-height:44px;max-width:100%;padding:10px 16px}
+.ww-order-history button{cursor:pointer;color:inherit;background:var(--paper,#fff)}
+.ww-order-history button:disabled{cursor:default;opacity:.5}
+.ww-order-history form{display:grid;gap:16px;max-width:480px}
+.ww-order-history label{display:grid;gap:8px}
+.ww-order-history input{width:100%;background:#fff;color:#191c21}
+.ww-order-history :focus-visible{outline:3px solid #167464;outline-offset:3px}
+.ww-order-list{margin:24px 0;border-top:1px solid #d8dee0}
+.ww-order-list details{border-bottom:1px solid #d8dee0;padding:16px 0}
+.ww-order-list summary{display:grid;grid-template-columns:minmax(0,1fr) minmax(100px,1fr) minmax(0,1fr) minmax(100px,1fr);gap:12px;cursor:pointer;align-items:start}
+.ww-order-list summary>*{overflow-wrap:anywhere}
+.ww-order-amount{text-align:right;font-variant-numeric:tabular-nums}
+.ww-order-list li{overflow-wrap:anywhere}
+.ww-order-actions{display:flex;justify-content:space-between;gap:16px}
+.ww-order-history [role=alert]{color:#9a2525;overflow-wrap:anywhere}
+@media(max-width:600px){.ww-order-list summary{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.ww-order-list summary time{order:3}.ww-order-list summary span:not(.ww-order-amount){order:4}.ww-order-amount{text-align:right}.ww-order-history button{white-space:normal}}

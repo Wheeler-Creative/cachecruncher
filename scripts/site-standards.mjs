@@ -20,6 +20,7 @@
 import { load } from "cheerio";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { faqUnreadableIssues } from "./faq-marks-lib.mjs";
 
 // These primitives deliberately live in this module instead of importing the
 // generator or migration parser. Managed repositories receive this exact file
@@ -50,6 +51,22 @@ function labelPlaceholders(html) {
 
 const LD_JSON = /<script\b[^>]*\btype\s*=\s*["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>/gi;
 
+// An external stylesheet a managed page is allowed to load.
+//
+// Web fonts, and nothing else. The generator asks the framework model for a
+// Google Fonts <link> by name and puts whatever it returns into every page's
+// <head>, and sanitizeManagedHtml has always let those through - so this is
+// the site standard, written down once instead of as a regex inside one
+// function. pageStyleContractIssues in the generator had its own stricter rule
+// ("/styles.css or nothing"), which meant the pipeline forbade on the assembled
+// page the exact thing it had asked the model to produce, and every
+// site.consistency run failed on it.
+const STYLESHEET_HOSTS = /^(?:https?:)?\/\/fonts\.(?:googleapis|gstatic)\.com\//i;
+
+export function isAllowedExternalStylesheet(href) {
+  return STYLESHEET_HOSTS.test(String(href || "").trim());
+}
+
 export function sanitizeManagedHtml(html) {
   const kept = [];
   const withoutStructuredData = String(html || "").replace(LD_JSON, (block) => {
@@ -69,7 +86,7 @@ export function sanitizeManagedHtml(html) {
       if (!/rel\s*=\s*["']stylesheet["']/i.test(tag)) return tag;
       const href = tagAttr(tag, "href");
       if (!/^(https?:)?\/\//i.test(href)) return tag;
-      return /fonts\.(?:googleapis|gstatic)\.com/i.test(href) ? tag : " ";
+      return isAllowedExternalStylesheet(href) ? tag : " ";
     })
     .replace(/(href|src)\s*=\s*("|')([^"']*)\2/gi, (match, attribute, quote, value) =>
       /javascript:/i.test(decodeHtmlEntities(value)) ? `${attribute}=${quote}#${quote}` : match)
@@ -218,7 +235,7 @@ export function fragmentLinkIssues(html) {
   return issues;
 }
 
-export async function localLinkIssues(html, route, siteRoot = null) {
+export async function localLinkIssues(html, route, siteRoot = null, fileOverrides = null) {
   // Without a site root there is no tree to resolve against, so link
   // existence cannot be judged - the other checks still can.
   if (!siteRoot) return [];
@@ -245,7 +262,9 @@ export async function localLinkIssues(html, route, siteRoot = null) {
     const resolved = candidates.map((candidate) => path.resolve(siteRoot, "public", candidate));
     if (resolved.some((candidate) => !candidate.startsWith(path.resolve(siteRoot, "public") + path.sep))) {
       issues.push(`unsafe local link ${href}`);
-    } else if (!(await Promise.all(resolved.map((file) => access(file).then(() => true).catch(() => false)))).some(Boolean)) {
+    } else if (!(await Promise.all(resolved.map((file) => fileOverrides?.has(file)
+      ? Promise.resolve(fileOverrides.get(file))
+      : access(file).then(() => true).catch(() => false)))).some(Boolean)) {
       issues.push(`missing local link ${href}`);
     }
   }
@@ -253,17 +272,37 @@ export async function localLinkIssues(html, route, siteRoot = null) {
 }
 
 export function formIssues(html) {
-  return [...String(html).matchAll(/<form\b[^>]*>/gi)]
-    .filter((match) => {
-      const action = match[0].match(/\baction\s*=\s*(["'])(.*?)\1/i)?.[2].trim();
-      const method = match[0].match(/\bmethod\s*=\s*(["'])(.*?)\1/i)?.[2].trim().toLowerCase() || "get";
-      if (!action || action === "#" || /^mailto:/i.test(action)) return true;
-      // Generated POST forms may use our Worker endpoint or an explicit HTTPS
-      // provider integration. Posting to any other local static route silently
-      // reloads a page and loses the visitor's submission.
-      return method === "post" && !/^https:\/\//i.test(action) && action.split(/[?#]/)[0] !== "/api/contact";
-    })
-    .map(() => "form has no deliverable action");
+  const issues = [];
+  const $ = load(String(html || ""));
+  $("form").each((_, node) => {
+    const form = $(node);
+    const action = String(form.attr("action") || "").trim();
+    const method = String(form.attr("method") || "get").trim().toLowerCase();
+    const path = action.split(/[?#]/)[0];
+    if (!action || action === "#" || /^mailto:/i.test(action)) {
+      issues.push("form has no deliverable action");
+      return;
+    }
+    if (path === "/api/contact") {
+      if (method !== "post") issues.push("managed contact form must use POST");
+      return;
+    }
+    if (method !== "post") return;
+    if (/^https:\/\//i.test(action)) {
+      issues.push("external POST form cannot use the managed verified form check; use a managed form or link to the provider");
+      return;
+    }
+    if (path === "/api/subscribe") {
+      const behaviors = String(form.attr("data-ww-behavior") || "").split(/\s+/);
+      const hasEmail = form.find('input[type="email"][name="email"][required]').length > 0;
+      const hasConsent = form.find('input[type="checkbox"][name="consent"][value="true"][required]').length > 0;
+      if (behaviors.includes("subscription-form") && hasEmail && hasConsent) return;
+      issues.push("managed subscription form needs its declared behavior, required email and explicit consent");
+      return;
+    }
+    issues.push("form has no deliverable action");
+  });
+  return issues;
 }
 
 // Deliberately does NOT include business_name absence: a page can legitimately
@@ -323,6 +362,58 @@ export function mobileOverflowIssues(html) {
 
 // An <img> with NO alt attribute at all is a deterministic missing-alt defect
 // (an empty alt="" is valid and deliberately allowed for decorative images).
+// ---- Video -------------------------------------------------------------------
+//
+// A VIDEO IS STREAMED, NEVER DOWNLOADED. The page names a stored file and the player asks the site for
+// it a piece at a time, so a visitor who watches ten seconds fetches ten seconds (the site's own Worker
+// answers those ranged requests; see serveMedia in the scaffold). Two things a page can do defeat that
+// and make every visitor fetch the whole file: carrying the media inside the page itself, and telling
+// the player to fetch all of it before anyone presses play.
+const STREAMS_ON_DEMAND = new Set(["metadata", "none"]);
+const tagHas = (tag, name) => new RegExp(`\\s${name}(?=[\\s=/>])`, "i").test(tag);
+const tagValue = (tag, name) => {
+  const match = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag);
+  return match ? (match[1] ?? match[2] ?? match[3] ?? "").trim() : "";
+};
+
+export function videoIssues(html) {
+  const issues = [];
+  for (const match of String(html).matchAll(/<(video|audio|source)\b[^>]*>/gi)) {
+    if (/^data:/i.test(tagValue(match[0], "src"))) {
+      issues.push(`<${match[1].toLowerCase()}> carries its media inside the page; link the stored file so it is streamed`);
+    }
+  }
+  for (const match of String(html).matchAll(/<video\b[^>]*>/gi)) {
+    // One that starts by itself is fetched as it plays.
+    if (tagHas(match[0], "autoplay")) continue;
+    if (!STREAMS_ON_DEMAND.has(tagValue(match[0], "preload").toLowerCase())) {
+      issues.push('<video> without preload="metadata", so a browser may download all of it before anyone plays it');
+    }
+  }
+  return issues;
+}
+
+// The same rule, applied. Deterministic like the copyright year, so a page whose author forgot the
+// attribute is put right on the way out instead of costing a build.
+export function streamVideoOnDemand(html) {
+  return String(html).replace(/<video\b[^>]*>/gi, (tag) => {
+    if (tagHas(tag, "autoplay") || STREAMS_ON_DEMAND.has(tagValue(tag, "preload").toLowerCase())) return tag;
+    const bare = tag.replace(/\spreload(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?(?=[\s/>])/i, "");
+    return bare.replace(/^<video\b/i, '<video preload="metadata"');
+  });
+}
+
+// ---- Frequently asked questions ----------------------------------------------
+//
+// The rule that marks a page's FAQ so the website's FAQ module can find it is in faq-marks-lib.mjs, which has no
+// dependencies of its own beyond cheerio so that the Worker can read it too (src/site-rules.js). It is re-exported here
+// because this is the module every stage that writes a page already imports, and managed repositories receive both files.
+// Only what the author can act on is a standards finding: a FAQ the list cannot keep (faqUnreadableIssues). A FAQ the
+// platform will mark is not, because every stage that writes a page marks it on the way out.
+export {
+  FAQ_LIMITS, faqListKey, faqMarkIssues, faqRouteForFile, faqUnreadableIssues, markFaqAccordions, markFaqLists, markFaqPage, planFaqLists
+} from "./faq-marks-lib.mjs";
+
 export function missingAltIssues(html) {
   const $ = parseHtml(html);
   // :not([alt]) rather than testing the tag text, so an <img> written inside a
@@ -378,19 +469,25 @@ export function landmarkIssues(html) {
   if (h1s !== 1) issues.push(h1s ? `${h1s} <h1> headings, expected exactly 1` : "no <h1>");
 
   // In document order, which is what a screen reader follows - and headings
-  // written inside a script string are not headings at all.
-  const levels = $("h1, h2, h3, h4, h5, h6")
-    .toArray()
-    .map((element) => Number(String(element.tagName || element.name).slice(1)));
-  let previous = 0;
-  for (const level of levels) {
-    // Going deeper by more than one step leaves a gap a screen reader reads as
-    // a missing section.
-    if (previous && level > previous + 1) {
-      issues.push(`heading level jumps from h${previous} to h${level}`);
-      break;
+  // written inside a script string are not headings at all. The page's own
+  // outline and the shared chrome around it are checked separately: a footer
+  // that opens at h4 is the layout's choice, not a gap in a short page's content.
+  const outlines = { content: [], chrome: [] };
+  for (const element of $("h1, h2, h3, h4, h5, h6").toArray()) {
+    const level = Number(String(element.tagName || element.name).slice(1));
+    outlines[$(element).closest("main, [role=main]").length ? "content" : "chrome"].push(level);
+  }
+  for (const levels of [outlines.content, outlines.chrome]) {
+    let previous = 0;
+    for (const level of levels) {
+      // Going deeper by more than one step leaves a gap a screen reader reads as
+      // a missing section.
+      if (previous && level > previous + 1) {
+        issues.push(`heading level jumps from h${previous} to h${level}`);
+        break;
+      }
+      previous = level;
     }
-    previous = level;
   }
   return issues;
 }
@@ -530,6 +627,102 @@ export function stylesheetIssues(css) {
   if (!/:root\s*\{[^}]*--/.test(source)) {
     issues.push("no design tokens in :root, so colours and spacing cannot be changed in one place");
   }
+  return issues;
+}
+
+// The block the accessibility repair writes at the end of a stylesheet (accessibility-fast-agent.mjs): one
+// measured fix per line, most of them colours forced with !important. Not authored style, so not counted as it.
+const A11Y_OVERRIDES = /\/\* ww-a11y-overrides:(?!end)[^*]*\*\/([\s\S]*?)\/\* ww-a11y-overrides:end \*\//g;
+// What a line in that block may be: the repair rewrites the block from lines of exactly this shape, and
+// anything else in it is dropped the next time it runs.
+const OVERRIDE_LINE = /^[^{}]+ \{ (?:background-color|border-color|color|outline(?:-[a-z]+)?|text-decoration(?:-[a-z]+)?): [^;{}]{1,80}; \}$/;
+
+// A line added to that block styles a state of something the repair forced, which is what its forced colour
+// would otherwise swallow. Any other selector would make the block a place to force a colour anywhere, uncounted.
+const STATE_SELECTOR = /:(?:hover|focus|focus-visible|focus-within|active|visited)(?![\w-])/;
+const stylesStatesOnly = (line) => line.slice(0, line.indexOf("{")).split(",").every((selector) => STATE_SELECTOR.test(selector));
+// ...and a state of something the block already forces. ".unrelated:hover" is a state too, and with nothing
+// tying it to a forced line the block was still a place to force a colour anywhere. The element is the same one
+// when, with its state taken off, the selector is a forced selector, or that selector less specific: without
+// its attribute or further class (".footer-link" for ".footer-link[href$='about/']") or without the context in
+// front of it (".footer-link" for ".site-footer .footer-link").
+const lineSelectors = (line) => line.slice(0, Math.max(0, line.indexOf("{"))).split(",").map((selector) => selector.replace(/\s+/g, " ").trim()).filter(Boolean);
+const withoutStates = (selector) => selector.replace(new RegExp(STATE_SELECTOR.source, "g"), "").replace(/\s+/g, " ").trim();
+const sameElement = (base, forced) => Boolean(base) && (forced === base
+  || (forced.startsWith(base) && /^[[:.#]/.test(forced.slice(base.length)))
+  || (forced.endsWith(base) && /[\s>+~]$/.test(forced.slice(0, forced.length - base.length))));
+
+// Each forced declaration by where it is, "selector { property }", with how many times it appears: the same pair
+// can sit both inside and outside a media query.
+function forcedDeclarations(css) {
+  const found = new Map();
+  const source = String(css || "").replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const [, prelude, body] of source.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+    const selector = prelude.replace(/\s+/g, " ").trim();
+    for (const declaration of body.split(";")) {
+      if (!/!\s*important/i.test(declaration)) continue;
+      const key = `${selector} { ${declaration.slice(0, Math.max(0, declaration.indexOf(":"))).trim().toLowerCase()} }`;
+      found.set(key, (found.get(key) || 0) + 1);
+    }
+  }
+  return found;
+}
+
+export function accessibilityOverrides(css) {
+  const lines = [];
+  const authored = String(css || "").replace(A11Y_OVERRIDES, (_block, inner) => {
+    lines.push(...inner.split("\n").map((line) => line.trim()).filter(Boolean));
+    return "";
+  });
+  return { authored, lines };
+}
+
+const IMPORTANT_HELP = "Write the rule without it. If the colour you need to change is being forced by the accessibility block at the end of the "
+  + "stylesheet (between the ww-a11y-overrides comments), read that block: delete the line that forces it and give the normal rule a colour with "
+  + "enough contrast, or add the state you need (hover, focus) inside the block as one line in the same form.";
+
+// What an edit made worse in a stylesheet, compared with how it was.
+//
+// This used to compare the two files' issue lists as text, and the !important issue carries its count. Any
+// change in the count read as a new issue, a decrease included: an editor could not remove a forced colour,
+// and could not style over one without !important either. A planned footer restyle ended there, with the
+// editor reporting that only someone able to change this check could finish it. The measure is now what was
+// added, and the accessibility block is the repair's own: its forced colours may be removed, or given the
+// hover and focus states they would otherwise swallow.
+//
+// "Added" is each forced declaration that was not there, by selector and property. The net count let an edit drop
+// one it inherited and force something else somewhere else, and read as no change.
+export function stylesheetRegressions(before, after) {
+  const was = accessibilityOverrides(before);
+  const now = accessibilityOverrides(after);
+  const tokens = (text) => /:root\s*\{[^}]*--/.test(String(text || ""));
+  const issues = [];
+  const forcedBefore = forcedDeclarations(was.authored);
+  const added = [...forcedDeclarations(now.authored)].flatMap(([key, count]) => Array(Math.max(0, count - (forcedBefore.get(key) || 0))).fill(key));
+  if (added.length) issues.push(`${added.length} new use(s) of !important. The first is ${added[0].slice(0, 160)}. ${IMPORTANT_HELP}`);
+  const known = new Set(was.lines);
+  const fresh = now.lines.filter((line) => !known.has(line));
+  const malformed = fresh.find((line) => !OVERRIDE_LINE.test(line));
+  if (malformed) {
+    issues.push("the accessibility block takes one rule per line, written exactly as \"selector { color: #rrggbb !important; }\" "
+      + `(colour, background colour, border colour, outline or text decoration only); this line is not: ${malformed.slice(0, 160)}`);
+  }
+  // The same selector with another value is still the repair's rule; a selector the block did not have is new.
+  const selectorOf = (line) => line.slice(0, Math.max(0, line.indexOf("{"))).replace(/\s+/g, " ").trim();
+  const forced = new Set(was.lines.map(selectorOf));
+  const stateless = fresh.find((line) => OVERRIDE_LINE.test(line) && !forced.has(selectorOf(line)) && !stylesStatesOnly(line));
+  if (stateless) {
+    issues.push("a line added to the accessibility block may only style a state (hover, focus, focus-visible, focus-within, active or visited) "
+      + `of what the block already forces; this one styles something else: ${stateless.slice(0, 160)}. Give that element its colour in a normal rule, without !important`);
+  }
+  const forcedElements = was.lines.flatMap(lineSelectors).map(withoutStates);
+  const unrelated = fresh.find((line) => OVERRIDE_LINE.test(line) && !forced.has(selectorOf(line)) && stylesStatesOnly(line)
+    && !lineSelectors(line).every((selector) => forcedElements.some((element) => sameElement(withoutStates(selector), element))));
+  if (unrelated) {
+    issues.push("a state added to the accessibility block must be a state of something the block already forces; "
+      + `nothing in the block forces what this one styles: ${unrelated.slice(0, 160)}. Give that element's state its colour in a normal rule, without !important`);
+  }
+  if (tokens(before) && !tokens(after)) issues.push("no design tokens in :root, so colours and spacing cannot be changed in one place");
   return issues;
 }
 
@@ -692,7 +885,17 @@ export function robotsIssues(txt, { origin = "" } = {}) {
 // What the builder, the editor and the migrator all call. Split into hard
 // failures and warnings so a standard can be introduced without every existing
 // site failing on the day it lands.
-export async function pageStandardsFindings(html, { route = "/", origin = "", allowedImageNames = null, siteRoot = null, now = new Date() } = {}) {
+// `fileContents` is a change's own files that are not written yet (relative path -> contents, null for a
+// deletion): a page created together with its manifest entry is composed from the change, not from a disk
+// that does not know the page. Older site copies of the compiler have no readSharedSources; they read the disk.
+export async function pageStandardsFindings(html, { route = "/", origin = "", allowedImageNames = null, siteRoot = null, fileOverrides = null, fileContents = null, now = new Date() } = {}) {
+  if(siteRoot && !/<html\b|<!doctype/i.test(html)){
+    const pendingManifest=fileContents?.has('layout/pages.json')?fileContents.get('layout/pages.json')!==null:null;
+    const shared=pendingManifest??await access(path.join(siteRoot,'layout/pages.json')).then(()=>true).catch(()=>false);
+    if(shared){const compose=await import('./compose-site-chrome.mjs');
+      const sources=fileContents&&typeof compose.readSharedSources==='function'?await compose.readSharedSources(siteRoot,fileContents):null;
+      html=await compose.renderSharedSource(siteRoot,route==='/'?'index.html':route.replace(/^\//,'')+'index.html',html,sources);}
+  }
   const failures = [
     // Inline rather than imported: this module is installed into customer
     // repositories byte-for-byte, where ../src/ does not exist.
@@ -701,14 +904,14 @@ export async function pageStandardsFindings(html, { route = "/", origin = "", al
     ...landmarkIssues(html),
     ...styleIssues(html),
     ...documentIssues(html, { route, origin }),
-    ...await localLinkIssues(html, route, siteRoot),
+    ...await localLinkIssues(html, route, siteRoot, fileOverrides),
     ...fragmentLinkIssues(html),
     ...formIssues(html),
-    ...missingAltIssues(html),
     ...unlabelledControlIssues(html),
     ...placeholderCopyIssues(html),
     ...forbiddenIntegrationIssues(html),
     ...mobileOverflowIssues(html),
+    ...videoIssues(html),
     ...(allowedImageNames ? managedImageSourcesOutsideAllowlist(html, allowedImageNames) : [])
   ];
   if (sanitizeManagedHtml(html) !== html) failures.push("contains active content forbidden in a managed static site");
@@ -717,7 +920,8 @@ export async function pageStandardsFindings(html, { route = "/", origin = "", al
     ...imageDimensionIssues(html),
     ...linkQualityIssues(html),
     ...socialMetaIssues(html),
-    ...structuredDataIssues(html)
+    ...structuredDataIssues(html),
+    ...faqUnreadableIssues(html, { route })
   ];
   return { failures, warnings };
 }
@@ -741,9 +945,17 @@ export async function pageStandardsFindings(html, { route = "/", origin = "", al
 // page-addition rules use for moved content: what was already there is not the
 // change under review.
 export async function standardsRegressions(before, after, options = {}) {
+  const { beforeFileOverrides = null, afterFileOverrides = null, beforeFileContents = null, afterFileContents = null, ...pageOptions } = options;
+  // A page that did not exist before is judged against the bare layout around an empty page, read from the
+  // change's own files: on a layout site that is what its shared head, chrome and scripts bring, which is not
+  // the change under review; elsewhere it is an empty document. (Composing an empty string threw on a layout
+  // site, which refused every page created in a change.)
+  const created = !String(before).trim();
   const [was, now] = await Promise.all([
-    pageStandardsFindings(before, options),
-    pageStandardsFindings(after, options)
+    created
+      ? pageStandardsFindings("<main></main>", { ...pageOptions, fileOverrides: afterFileOverrides, fileContents: afterFileContents })
+      : pageStandardsFindings(before, { ...pageOptions, fileOverrides: beforeFileOverrides, fileContents: beforeFileContents }),
+    pageStandardsFindings(after, { ...pageOptions, fileOverrides: afterFileOverrides, fileContents: afterFileContents })
   ]);
 
   // Compared as multisets, not sets: a page that had one unsized image and now

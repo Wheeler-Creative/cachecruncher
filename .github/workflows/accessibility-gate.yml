@@ -1,0 +1,151 @@
+# Per-site WCAG 2.1 AA gate.
+#
+# Installed into every managed site repository by the template. It runs on any
+# change to the site's own pages, so a hand edit, a revision, or a change made
+# outside the edit-request flow is held to the same bar as a generated build.
+#
+# The platform build/edit agent performs model repairs with platform credentials
+# before publication. This workflow is the backstop for everything else (a hand
+# edit, an older migration, a rule the platform agent has since learned): on a
+# push to main it applies the deterministic, key-free repairs, commits them,
+# redeploys, and then verifies. A pull request is only scanned.
+name: Accessibility gate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "public/**/*.html"
+      - "public/**/*.css"
+      - ".github/workflows/accessibility-gate.yml"
+      - "scripts/accessibility*.mjs"
+      - "scripts/remediate-accessibility.mjs"
+      - "scripts/verify-preview-accessibility.mjs"
+  pull_request:
+    paths:
+      - "public/**/*.html"
+      - "public/**/*.css"
+      - ".github/workflows/accessibility-gate.yml"
+      - "scripts/accessibility*.mjs"
+      - "scripts/remediate-accessibility.mjs"
+      - "scripts/verify-preview-accessibility.mjs"
+  workflow_dispatch:
+  # A change is scanned where it landed; this weekly pass looks at every page.
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: write
+  checks: write
+  actions: write
+
+concurrency:
+  group: accessibility-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  accessibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install accessibility engine and browser
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.1 axe-core@4.10.2
+          npx playwright install --with-deps chromium
+
+      # Deterministic repairs need no model key and this job receives none. Set
+      # the repository variable A11Y_REPAIR to "false" to turn the automatic
+      # commit off and make this a scan-only gate. A pull request is never
+      # rewritten, only scanned.
+      - name: Repair accessibility defects
+        id: repair
+        if: ${{ github.event_name != 'pull_request' && vars.A11Y_REPAIR != 'false' }}
+        env:
+          A11Y_REPAIR: "true"
+          A11Y_ENFORCE: "false"
+          A11Y_CHANGED_FROM: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'full' }}
+        run: |
+          node scripts/remediate-accessibility.mjs .
+          if [[ -n "$(git status --porcelain -- public layout)" ]]; then
+            git config user.name "wheelers-websites-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add -- public layout
+            git commit -m "Repair accessibility violations"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+            echo "repaired=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A push made with the workflow token starts no other workflow, so the
+      # repaired site is deployed explicitly.
+      - name: Deploy the repaired site
+        if: ${{ steps.repair.outputs.repaired == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-manual-change.yml --ref "${GITHUB_REF_NAME}" || echo "::warning::The repairs were committed but the deploy could not be started; run Deploy manual website change."
+
+      # Verification never rewrites anything: a red run here means a violation
+      # that needs the platform's model repair or a person.
+      - name: Scan accessibility defects
+        env:
+          A11Y_REPAIR: "false"
+          A11Y_ENFORCE: ${{ vars.A11Y_ENFORCE }}
+          A11Y_CHANGED_FROM: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'full' }}
+        run: node scripts/remediate-accessibility.mjs .
+      - name: Publish accessibility repair details
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const sha = context.payload.pull_request?.head?.sha;
+            if (!sha) return;
+            let report = null;
+            try { report = JSON.parse(fs.readFileSync('.site-accessibility.json', 'utf8')); } catch {}
+            const pages = (Array.isArray(report?.pages) ? report.pages : [])
+              .filter((page) => Number(page.blockingCount || 0) > 0)
+              .slice(0, 20)
+              .map((page) => `- ${String(page.path || '/').slice(0, 120)}: ${Number(page.blockingCount || 0)} blocking (${(Array.isArray(page.ruleIds) ? page.ruleIds : []).slice(0, 20).join(', ')})`);
+            const rules = (Array.isArray(report?.blockingRuleIds) ? report.blockingRuleIds : []).slice(0, 30);
+            const summary = report
+              ? [`${Number(report.blockingCount || 0)} blocking accessibility issue(s) across ${Number(report.pagesScanned || 0)} page(s).`,
+                 rules.length ? `Rules: ${rules.join(', ')}` : 'No blocking rules.',
+                 ...pages].join('\n')
+              : 'The accessibility scan did not produce a report. Check the accessibility job logs.';
+            const output = { title: 'Accessibility repair details', summary: summary.slice(0, 12000) };
+            const existing = await github.rest.checks.listForRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: sha, per_page: 100
+            });
+            const prior = existing.data.check_runs
+              .filter((check) => check.name === 'Accessibility repair details')
+              .sort((left, right) => Date.parse(right.started_at || '') - Date.parse(left.started_at || ''))[0];
+            const checkInput = {
+              owner: context.repo.owner, repo: context.repo.repo,
+              name: 'Accessibility repair details', head_sha: sha,
+              status: 'completed', conclusion: 'neutral', output
+            };
+            if (prior) {
+              await github.rest.checks.update({ ...checkInput, check_run_id: prior.id });
+            } else {
+              await github.rest.checks.create(checkInput);
+            }
+
+      - name: Upload accessibility evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: accessibility-${{ github.sha }}
+          path: .site-accessibility.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14

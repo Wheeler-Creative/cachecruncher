@@ -30,6 +30,26 @@ export function repositoryMatches(config, slug) {
   return accepted.some((value) => value.toLowerCase() === String(slug || "").toLowerCase());
 }
 
+export async function waitForRepositoryRegistration({
+  config,
+  load,
+  attempts = 12,
+  waitMs = 5000,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  onWait = () => {}
+}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const repositories = await load();
+    const repository = repositories.find((item) => repositoryMatches(config, item.repo_slug));
+    if (repository) return repository;
+    if (attempt < attempts) {
+      onWait(attempt, attempts);
+      await sleep(waitMs);
+    }
+  }
+  return null;
+}
+
 export async function output(values) {
   if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT is required");
   const lines = Object.entries(values).map(([key, value]) => `${key}=${value || ""}`).join("\n");

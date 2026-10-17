@@ -1194,4 +1194,175 @@
 })();
 
 /* ww-header-layout-runtime */
-(function(){function start(){var header=document.querySelector('.site-header');if(!header)return;function measure(){document.documentElement.style.setProperty('--ww-header-height',header.getBoundingClientRect().height+'px');}measure();if(typeof ResizeObserver!=='undefined')new ResizeObserver(measure).observe(header);}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();})();
+(function(){function start(){var header=document.querySelector('.site-header');if(!header)return;if(parseFloat(getComputedStyle(header).marginBlockEnd)<0)header.style.marginBlockEnd='0';function measure(){document.documentElement.style.setProperty('--ww-header-height',header.getBoundingClientRect().height+'px');}measure();if(typeof ResizeObserver!=='undefined')new ResizeObserver(measure).observe(header);}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();})();
+
+/* ww-adaptive-header-runtime */
+(function () {
+  var MIN = 4.5, COLS = 24, ROWS = 8;
+  function channel(v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+  function lum(r, g, b) { return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b); }
+  function ratio(a, b) { return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); }
+  function parse(value) {
+    var m = /rgba?\(([^)]+)\)/.exec(value || ''); if (!m) return null;
+    var p = m[1].split(',').map(parseFloat); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+  }
+  // Luminance of each cell of the strip of image that sits under the header.
+  function imageSamples(backdrop, header) {
+    var img = backdrop.querySelector('img');
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    var box = backdrop.getBoundingClientRect(), bar = header.getBoundingClientRect();
+    var top = Math.max(bar.top, box.top), bottom = Math.min(bar.bottom, box.bottom);
+    if (bottom <= top || !box.width || !box.height) return null;
+    var style = getComputedStyle(img), cover = style.objectFit === 'cover';
+    var scale = Math.max(box.width / img.naturalWidth, box.height / img.naturalHeight);
+    var y = parseFloat((style.objectPosition || '50% 50%').split(' ')[1]);
+    var offset = (box.height - img.naturalHeight * scale) * ((isNaN(y) ? 50 : y) / 100);
+    // Covered images are cropped around their focal point; any other fit stretches across the whole box.
+    var sy = cover ? Math.max(0, (top - box.top - offset) / scale) : (top - box.top) / box.height * img.naturalHeight;
+    var sh = Math.max(1, Math.min(img.naturalHeight - sy, cover ? (bottom - top) / scale : (bottom - top) / box.height * img.naturalHeight));
+    var sx = cover ? Math.max(0, (img.naturalWidth - box.width / scale) / 2) : 0;
+    var sw = cover ? Math.min(img.naturalWidth, box.width / scale) : img.naturalWidth;
+    try {
+      var canvas = document.createElement('canvas'); canvas.width = COLS; canvas.height = ROWS;
+      var ctx = canvas.getContext('2d'); ctx.drawImage(img, sx, sy, sw, sh, 0, 0, COLS, ROWS);
+      var data = ctx.getImageData(0, 0, COLS, ROWS).data, out = [];
+      for (var i = 0; i < data.length; i += 4) out.push(lum(data[i], data[i + 1], data[i + 2]));
+      return out;
+    } catch (error) { return null; }
+  }
+  function colourSample(backdrop) {
+    var c = parse(getComputedStyle(backdrop).backgroundColor);
+    return c && c.a > 0.5 ? [lum(c.r, c.g, c.b)] : null;
+  }
+  // The weakest 5% of cells are ignored so one stray highlight does not decide the tone.
+  function worst(samples, ink) {
+    var all = samples.map(function (s) { return ratio(ink, s); }).sort(function (a, b) { return a - b; });
+    return all[Math.floor(all.length * 0.05)];
+  }
+  function update(header) {
+    var backdrop = document.querySelector('[data-ww-header-backdrop]');
+    var samples = backdrop && (imageSamples(backdrop, header) || colourSample(backdrop));
+    header.removeAttribute('data-ww-header-tone'); header.removeAttribute('data-ww-header-contrast');
+    // A photo that cannot be read here (not loaded, or from another origin) is left to a scan of the deployed site.
+    if (!samples) { if (backdrop) header.setAttribute('data-ww-header-tone', 'unverified'); return; }
+    var probe = header.querySelector('.brand-title') || header, own = parse(getComputedStyle(probe).color);
+    var light = worst(samples, 1), dark = own ? worst(samples, lum(own.r, own.g, own.b)) : 0;
+    var tone = light >= MIN && light > dark ? 'light' : 'dark';
+    header.setAttribute('data-ww-header-tone', tone);
+    header.setAttribute('data-ww-header-contrast', (tone === 'light' ? light : dark).toFixed(2));
+  }
+  function start() {
+    var header = document.querySelector('.site-header');
+    if (!header || !document.querySelector('[data-ww-header-backdrop]')) return;
+    var frame;
+    function schedule() { cancelAnimationFrame(frame); frame = requestAnimationFrame(function () { update(header); }); }
+    schedule();
+    window.addEventListener('load', schedule);
+    window.addEventListener('resize', schedule, { passive: true });
+    var img = document.querySelector('[data-ww-header-backdrop] img');
+    if (img && !img.complete) img.addEventListener('load', schedule, { once: true });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
+})();
+
+/* ww-header-nav-runtime v2 */
+(function () {
+  function start() {
+    var header = document.querySelector('.site-header:not(.ww-source-header)');
+    var inner = header && header.querySelector('.header-inner');
+    // The menu list: #primary-nav where the site named it, else the first list inside the header's nav (a site built
+    // or migrated without the id still gets one row, and a More menu, rather than nothing).
+    var nav = inner && (inner.querySelector('#primary-nav') || inner.querySelector('nav > ul, nav ul, ul.nav-list'));
+    if (nav) nav.setAttribute('data-ww-nav-list', '');
+    if (!nav) return;
+    var root = nav;
+    while (root.parentElement && root.parentElement !== inner) root = root.parentElement;
+    var brand = inner.querySelector(':scope>.brand,:scope>[class*="brand"],:scope>[class*="logo"]') || inner.querySelector(':scope>a');
+    var toggle = header.querySelector('[data-ww-behavior~="nav-toggle"]');
+    if (root.parentElement !== inner || !brand || brand === root) return;
+    root.setAttribute('data-ww-nav-root', '');
+    brand.setAttribute('data-ww-nav-brand', '');
+    var actions = Array.prototype.filter.call(nav.children, function (li) { return li.querySelector('[data-ww-header-action],a[href="/cart/"],a[href="/cart"]'); });
+    var shelf = null, width = -1, more = null;
+    // The "More" menu: a button at the end of the row that opens a list of the buttons that did not fit.
+    function moreMenu() {
+      if (more) return more;
+      more = document.createElement('li');
+      more.className = 'ww-nav-more';
+      more.hidden = true;
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ww-nav-more-toggle';
+      button.setAttribute('aria-expanded', 'false');
+      button.setAttribute('aria-haspopup', 'true');
+      button.textContent = nav.getAttribute('data-ww-more-label') || 'More';
+      var list = document.createElement('ul');
+      list.className = 'ww-nav-more-list';
+      list.hidden = true;
+      button.addEventListener('click', function () { var open = list.hidden; list.hidden = !open; button.setAttribute('aria-expanded', String(open)); });
+      document.addEventListener('click', function (event) { if (!more.contains(event.target) && !list.hidden) { list.hidden = true; button.setAttribute('aria-expanded', 'false'); } });
+      more.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !list.hidden) { list.hidden = true; button.setAttribute('aria-expanded', 'false'); button.focus(); } });
+      more.appendChild(button);
+      more.appendChild(list);
+      return more;
+    }
+    // Every button back in the row, in its original order, and the More menu emptied.
+    function restore() {
+      if (!more || more.hidden) return;
+      var list = more.lastChild;
+      while (list.firstChild) nav.insertBefore(list.firstChild, more);
+      more.hidden = true;
+      more.firstChild.setAttribute('aria-expanded', 'false');
+      list.hidden = true;
+    }
+    // Move the last ordinary buttons into More, one at a time, until the row fits (or only two are left).
+    function fold() {
+      var menu = moreMenu();
+      if (!menu.parentNode) nav.appendChild(menu);
+      var ordinary = function () { return Array.prototype.filter.call(nav.children, function (li) { return li !== menu && actions.indexOf(li) < 0; }); };
+      var folded = 0;
+      while (!menuFits() && ordinary().length > 2 && folded < 40) {
+        var items = ordinary();
+        menu.hidden = false;
+        menu.lastChild.insertBefore(items[items.length - 1], menu.lastChild.firstChild);
+        folded++;
+      }
+      return menuFits();
+    }
+    function place(inRow) {
+      if (!actions.length) return;
+      if (!inRow && !shelf) { shelf = document.createElement('ul'); shelf.className = 'ww-header-actions'; inner.insertBefore(shelf, root); }
+      actions.forEach(function (li) { (inRow ? nav : shelf).appendChild(li); });
+      if (shelf) shelf.hidden = inRow;
+    }
+    function fits(el) { return el.scrollWidth <= el.clientWidth + 1; }
+    // The menu fits only when nothing runs past the header either: a list whose container has no width of its own
+    // (one sized by its content) measures as fitting itself while it runs off the screen.
+    function menuFits() { return fits(nav) && fits(inner) && nav.getBoundingClientRect().right <= inner.getBoundingClientRect().right + 1; }
+    function mode(name, compact) { header.setAttribute('data-ww-nav', name); header.toggleAttribute('data-ww-nav-compact', compact); place(name === 'row'); }
+    function update(force) {
+      if (!force && inner.clientWidth === width) return;
+      width = inner.clientWidth;
+      restore();
+      if (toggle && getComputedStyle(toggle).display !== 'none') { header.removeAttribute('data-ww-nav'); header.removeAttribute('data-ww-nav-compact'); place(true); return; }
+      // Tightest acceptable first: one row beside the brand, then the menu's own row, then the row with a More menu.
+      for (var i = 0; i < 4; i++) {
+        mode(i < 2 ? 'row' : 'stacked', i % 2 === 1);
+        if (i < 2 ? fits(inner) : menuFits()) return;
+      }
+      mode('stacked', true);
+      if (fold()) { header.setAttribute('data-ww-nav', 'more'); return; }
+      mode('wrapped', true);
+    }
+    update(true);
+    var frame;
+    function schedule() { cancelAnimationFrame(frame); frame = requestAnimationFrame(function () { update(false); }); }
+    window.addEventListener('resize', schedule, { passive: true });
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(schedule).observe(inner);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { update(true); });
+    window.addEventListener('load', function () { update(true); }, { once: true });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
+})();

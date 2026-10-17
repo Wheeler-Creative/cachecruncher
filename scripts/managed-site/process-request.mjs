@@ -4,7 +4,7 @@ import path from "node:path";
 import { headers, loadConfig, repositoryMatches, requireEnvironment, restUrl, updateRequest } from "./lib.mjs";
 import { standardsRegressions } from "../site-standards.mjs";
 
-requireEnvironment(["REQUEST_ID", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "OPENROUTER_API_KEY", "GITHUB_REPOSITORY"]);
+requireEnvironment(["REQUEST_ID", "SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BUILD_MODEL", "GITHUB_REPOSITORY"]);
 const config = await loadConfig();
 const requestId = process.env.REQUEST_ID;
 
@@ -56,18 +56,20 @@ async function fetchRequest() {
   return request;
 }
 
-async function openRouterJson(name, schema, messages, temperature = 0.2) {
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+async function openRouterJson(name, schema, messages) {
+  const models = [...new Set([process.env.OPENROUTER_BUILD_MODEL, process.env.OPENROUTER_ESCALATION_MODEL].filter(Boolean))];
+  let lastError;
+  for (const model of models) {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
       "content-type": "application/json",
       "http-referer": `https://github.com/${process.env.GITHUB_REPOSITORY}`,
-      "x-title": "Wheelers Websites Managed Site Editor"
+      "x-title": "Jaybird Digital Managed Site Editor"
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_CODER_MODEL || "openrouter/pareto-code",
-      temperature,
+      model,
       response_format: {
         type: "json_schema",
         json_schema: {
@@ -79,11 +81,13 @@ async function openRouterJson(name, schema, messages, temperature = 0.2) {
       messages
     })
   });
-  if (!response.ok) throw new Error(`OpenRouter failed: ${await response.text()}`);
+  if (!response.ok) { lastError = new Error(`OpenRouter failed: ${await response.text()}`); continue; }
   const payload = await response.json();
   const content = payload?.choices?.[0]?.message?.content;
   if (!content) throw new Error("OpenRouter returned no structured content");
   return JSON.parse(content);
+  }
+  throw lastError || new Error("The build preset is required for website edits.");
 }
 
 async function planChange(request, source) {
@@ -120,7 +124,7 @@ async function planChange(request, source) {
   return openRouterJson("managed_site_plan", schema, [
     { role: "system", content: "Create a precise implementation plan grounded only in the supplied repository code." },
     { role: "user", content: JSON.stringify(prompt) }
-  ], 0.1);
+  ]);
 }
 
 function validatePlan(plan, source) {

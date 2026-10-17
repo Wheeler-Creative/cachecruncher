@@ -8,6 +8,10 @@ const invokedDirectly = process.argv[1]
 export async function applyRequestStatus({ status, requestId, env = process.env, fetchImpl = fetch, now = new Date() }) {
   if (!status) throw new Error("Status is required");
   if (!requestId) throw new Error("Request id is required");
+  if (status === "preview-cleaned") {
+    await updateRequest(requestId, { preview_worker_name: null }, fetchImpl);
+    return;
+  }
   const timestamp = now.toISOString();
   const patch = {
     status,
@@ -19,8 +23,7 @@ export async function applyRequestStatus({ status, requestId, env = process.env,
     ...(env.PULL_REQUEST_URL ? { pull_request_url: env.PULL_REQUEST_URL } : {}),
     ...(status === "deployed" ? {
       deployed_at: timestamp,
-      preview_url: null,
-      preview_worker_name: null
+      preview_url: null
     } : {})
   };
 

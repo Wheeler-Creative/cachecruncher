@@ -5,13 +5,15 @@
     "itswheeler/cachecruncher"
   ],
   "allowedRoots": [
-    "public"
+    "public",
+    "layout"
   ],
   "allowedExtensions": [
     ".html",
     ".css",
     ".js",
-    ".jsx"
+    ".jsx",
+    ".json"
   ],
   "verificationPaths": [
     "/"
