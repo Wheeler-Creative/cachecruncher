@@ -14,10 +14,10 @@
           <div class="field with-unit">
             <label for="cache_size">Cache Size</label>
             <div class="row">
-              <input type="number" step="any" min="0" id="cache_size" name="cache_size" placeholder="e.g. 32" />
-              <select id="cache_unit" name="cache_unit">
+              <input type="number" step="any" min="0" id="cache_size" name="cache_size" placeholder="e.g. 32">
+              <select id="cache_unit" name="cache_unit" aria-label="Cache size unit">
                 <option value="B">B</option>
-                <option value="KB" selected>KB</option>
+                <option value="KB" selected="">KB</option>
                 <option value="MB">MB</option>
                 <option value="GB">GB</option>
               </select>
@@ -26,36 +26,36 @@
 
           <div class="field">
             <label for="block_size">Block Size (Bytes)</label>
-            <input type="number" min="1" step="1" id="block_size" name="block_size" placeholder="e.g. 64" />
+            <input type="number" min="1" step="1" id="block_size" name="block_size" placeholder="e.g. 64">
           </div>
 
           <div class="field">
             <label for="num_blocks">Number of Blocks</label>
-            <input type="number" min="1" step="1" id="num_blocks" name="num_blocks" placeholder="leave blank to derive" />
+            <input type="number" min="1" step="1" id="num_blocks" name="num_blocks" placeholder="leave blank to derive">
           </div>
 
           <div class="field">
             <label for="associativity">Associativity</label>
-            <input type="number" min="1" step="1" id="associativity" name="associativity" placeholder="1 = direct-mapped" />
+            <input type="number" min="1" step="1" id="associativity" name="associativity" placeholder="1 = direct-mapped">
           </div>
 
           <div class="field">
             <label for="num_sets">Number of Sets</label>
-            <input type="number" min="1" step="1" id="num_sets" name="num_sets" placeholder="leave blank to derive" />
+            <input type="number" min="1" step="1" id="num_sets" name="num_sets" placeholder="leave blank to derive">
           </div>
 
           <div class="three">
             <div class="field">
               <label for="index_bits">Index Bits</label>
-              <input type="number" min="0" step="1" id="index_bits" name="index_bits" placeholder="" />
+              <input type="number" min="0" step="1" id="index_bits" name="index_bits" placeholder="">
             </div>
             <div class="field">
               <label for="tag_bits">Tag Bits</label>
-              <input type="number" min="0" step="1" id="tag_bits" name="tag_bits" placeholder="" />
+              <input type="number" min="0" step="1" id="tag_bits" name="tag_bits" placeholder="">
             </div>
             <div class="field">
               <label for="offset_bits">Offset Bits</label>
-              <input type="number" min="0" step="1" id="offset_bits" name="offset_bits" placeholder="" />
+              <input type="number" min="0" step="1" id="offset_bits" name="offset_bits" placeholder="">
             </div>
           </div>
         </section>
@@ -66,16 +66,16 @@
 
           <div class="field">
             <label for="address_size">Physical Address Space (bits)</label>
-            <input type="number" min="1" step="1" id="address_size" name="address_size" placeholder="e.g. 32" />
+            <input type="number" min="1" step="1" id="address_size" name="address_size" placeholder="e.g. 32">
           </div>
 
           <div class="field with-unit">
             <label for="addressable_memory">Physical Memory</label>
             <div class="row">
-              <input type="number" step="any" min="0" id="addressable_memory" name="addressable_memory" placeholder="" />
-              <select id="addr_mem_unit" name="addr_mem_unit">
+              <input type="number" step="any" min="0" id="addressable_memory" name="addressable_memory" placeholder="">
+              <select id="addr_mem_unit" name="addr_mem_unit" aria-label="Addressable memory unit">
                 <option value="B">B</option>
-                <option value="KB" selected>KB</option>
+                <option value="KB" selected="">KB</option>
                 <option value="MB">MB</option>
                 <option value="GB">GB</option>
               </select>
@@ -84,17 +84,17 @@
 
           <div class="field">
             <label for="virtual_address_size">Virtual Address Space (bits)</label>
-            <input type="number" min="1" step="1" id="virtual_address_size" name="virtual_address_size" placeholder="" />
+            <input type="number" min="1" step="1" id="virtual_address_size" name="virtual_address_size" placeholder="">
           </div>
 
           <div class="field with-unit">
             <label for="virtual_memory">Virtual Memory</label>
             <div class="row">
-              <input type="number" step="any" min="0" id="virtual_memory" name="virtual_memory" placeholder="" />
-              <select id="virt_mem_unit" name="virt_mem_unit">
+              <input type="number" step="any" min="0" id="virtual_memory" name="virtual_memory" placeholder="">
+              <select id="virt_mem_unit" name="virt_mem_unit" aria-label="Virtual memory unit">
                 <option value="B">B</option>
                 <option value="KB">KB</option>
-                <option value="MB" selected>MB</option>
+                <option value="MB" selected="">MB</option>
                 <option value="GB">GB</option>
               </select>
             </div>
@@ -103,10 +103,10 @@
           <div class="field with-unit">
             <label for="pagesize">Page Size</label>
             <div class="row">
-              <input type="number" step="any" min="0" id="pagesize" name="pagesize" placeholder="e.g. 4" />
-              <select id="page_unit" name="page_unit">
+              <input type="number" step="any" min="0" id="pagesize" name="pagesize" placeholder="e.g. 4">
+              <select id="page_unit" name="page_unit" aria-label="Page size unit">
                 <option value="B">B</option>
-                <option value="KB" selected>KB</option>
+                <option value="KB" selected="">KB</option>
                 <option value="MB">MB</option>
                 <option value="GB">GB</option>
               </select>
@@ -116,11 +116,11 @@
           <div class="three">
             <div class="field">
               <label for="tlb_rows">TLB Rows</label>
-              <input type="number" min="1" step="1" id="tlb_rows" name="tlb_rows" placeholder="" />
+              <input type="number" min="1" step="1" id="tlb_rows" name="tlb_rows" placeholder="">
             </div>
             <div class="field">
               <label for="protection_bits">Protection Bits</label>
-              <input type="number" min="0" step="1" id="protection_bits" name="protection_bits" placeholder="" />
+              <input type="number" min="0" step="1" id="protection_bits" name="protection_bits" placeholder="">
             </div>
             <div class="field">
               <label>&nbsp;</label>
@@ -157,7 +157,7 @@
       <div class="simulator-toolbar">
         <label class="field simulator-address-field" for="simAddress">
           <span>Address (hex or decimal)</span>
-          <input type="text" id="simAddress" placeholder="e.g. 0x3F or 63" inputmode="text" />
+          <input type="text" id="simAddress" placeholder="e.g. 0x3F or 63" inputmode="text">
         </label>
         <label class="field simulator-mode-field" for="simAddressType">
           <span>Address Space</span>
@@ -323,3 +323,4 @@
       <p><strong>Built by Steve Wheeler</strong> — UTSA student from 2023–2025, built while taking Professor Ortiz’s computer infrastructure class to stay engaged and learn.</p>
     </article>
   </main>
+
