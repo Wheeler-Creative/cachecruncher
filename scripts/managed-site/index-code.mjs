@@ -3,14 +3,17 @@ import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { headers, loadConfig, requireEnvironment, restUrl, waitForRepositoryRegistration } from "./lib.mjs";
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+// Run only when executed as the workflow's script; imported (by a test of chunksFor) it does nothing.
+const isMain = Boolean(process.argv[1]) && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain && (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY)) {
   console.log("Supabase credentials not configured in this repository; skipping index.");
   process.exit(0);
 }
-requireEnvironment(["GITHUB_REPOSITORY"]);
-const config = await loadConfig();
+if (isMain) requireEnvironment(["GITHUB_REPOSITORY"]);
+const config = isMain ? await loadConfig() : null;
 const MAX_CHUNK_CHARS = 3500;
 const CHUNK_OVERLAP_CHARS = 300;
 
@@ -33,7 +36,17 @@ async function listFiles(directory) {
   return nested.flat();
 }
 
-function chunksFor(filePath, content, repositoryId, commit) {
+// A chunk boundary never splits a surrogate pair: an emoji cut in half is an unpaired surrogate, which the
+// database refuses as invalid text (Flyloop carried this fix in its own copy of this file, 2026-08-30, and a
+// runtime upgrade would have put the unsafe version back).
+function safeUnicodeBoundary(content, index) {
+  if (index <= 0 || index >= content.length) return index;
+  const previous = content.charCodeAt(index - 1);
+  const current = content.charCodeAt(index);
+  return previous >= 0xD800 && previous <= 0xDBFF && current >= 0xDC00 && current <= 0xDFFF ? index - 1 : index;
+}
+
+export function chunksFor(filePath, content, repositoryId, commit) {
   const chunks = [];
   let start = 0;
   while (start < content.length) {
@@ -42,6 +55,7 @@ function chunksFor(filePath, content, repositoryId, commit) {
       const newline = content.lastIndexOf("\n", end);
       if (newline > start + MAX_CHUNK_CHARS / 2) end = newline;
     }
+    end = safeUnicodeBoundary(content, end);
     const chunk = content.slice(start, end).trim();
     if (chunk) {
       chunks.push({
@@ -55,7 +69,7 @@ function chunksFor(filePath, content, repositoryId, commit) {
       });
     }
     if (end >= content.length) break;
-    start = Math.max(end - CHUNK_OVERLAP_CHARS, start + 1);
+    start = safeUnicodeBoundary(content, Math.max(end - CHUNK_OVERLAP_CHARS, start + 1));
   }
   return chunks;
 }
@@ -113,7 +127,7 @@ async function replaceIndex(repositoryId, chunks) {
   }
 }
 
-if (await indexAvailable()) {
+if (isMain && await indexAvailable()) {
   const repository = await findRepository();
   const files = (await Promise.all(config.allowedRoots.map(listFiles))).flat().sort();
   const commit = process.env.GITHUB_SHA || execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
