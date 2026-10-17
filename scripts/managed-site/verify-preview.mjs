@@ -109,10 +109,10 @@ async function verifyWithVision(request, evidence) {
       authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
       "content-type": "application/json",
       "http-referer": `https://github.com/${process.env.GITHUB_REPOSITORY || "Wheeler-Creative"}`,
-      "x-title": "Wheelers Websites Visual QA"
+      "x-title": "Jaybird Digital Visual QA"
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_MODEL || "google/gemini-2.5-flash-lite",
+      model: process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_MODEL || "google/gemini-3.1-flash-lite",
       temperature: 0,
       response_format: {
         type: "json_schema",

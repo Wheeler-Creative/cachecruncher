@@ -1,0 +1,15 @@
+.ww-shipping-plan h2{font-size:1.2rem;line-height:1.3;margin:32px 0 12px;letter-spacing:0}
+.ww-shipping-plan fieldset{border:1px solid #d8dee0;border-radius:4px;margin:0;padding:12px 16px;display:grid;gap:12px;min-width:0}
+.ww-shipping-plan legend{padding:0 4px;font-weight:600}
+.ww-shipping-plan .ww-ship-option,.ww-shipping-plan .ww-ship-agree{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start}
+.ww-shipping-plan .ww-ship-option input,.ww-shipping-plan .ww-ship-agree input{width:22px;height:22px;min-height:0;margin:2px 0 0;padding:0}
+.ww-ship-option span{display:grid;gap:4px;overflow-wrap:anywhere}
+.ww-ship-option small,.ww-ship-list small{display:block;color:#4b555a}
+.ww-ship-facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 16px;margin:16px 0}
+.ww-ship-facts dt{font-weight:600}
+.ww-ship-facts dd{margin:0;overflow-wrap:anywhere}
+.ww-ship-list{padding-left:20px;display:grid;gap:8px}
+.ww-ship-list li{overflow-wrap:anywhere}
+.ww-ship-list a{display:inline-block;margin-top:4px;color:inherit}
+.ww-ship-note{padding:12px 16px;background:#eef5f3;border-radius:4px}
+.ww-ship-signout{margin-top:24px}

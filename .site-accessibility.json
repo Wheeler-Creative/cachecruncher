@@ -1,0 +1,31 @@
+{
+  "standard": "WCAG 2.1 AA",
+  "pagesScanned": 1,
+  "violationCount": 0,
+  "blockingCount": 0,
+  "nodeCount": 0,
+  "byImpact": {},
+  "blockingRuleIds": [],
+  "pages": [
+    {
+      "path": "/",
+      "violationCount": 0,
+      "blockingCount": 0,
+      "ruleIds": []
+    }
+  ],
+  "repairAttempts": 0,
+  "pagesRepaired": 0,
+  "initialProblemCount": 0,
+  "enforced": true,
+  "repairEnabled": false,
+  "unscannable": [],
+  "scope": {
+    "mode": "full",
+    "pagesOnSite": 1,
+    "pagesScanned": 1,
+    "changedPages": 0,
+    "sample": 0
+  },
+  "completedAt": "2026-10-17T19:38:34.683Z"
+}

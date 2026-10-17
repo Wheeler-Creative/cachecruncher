@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       request_id:
-        description: Optional Supabase request id
-        required: false
+        description: Supabase request id
+        required: true
         type: string
       resume_branch:
         description: Existing generated branch to resume
@@ -44,7 +44,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MANAGED_SITE_GITHUB_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
         run: >-
@@ -63,6 +63,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,16 +81,18 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_CODER_MODEL: ${{ vars.OPENROUTER_CODER_MODEL }}
         run: node scripts/managed-site/process-request.mjs
       - name: Build generated site data
         run: |
           npm run build --if-present
           npm run build:data --if-present
       - name: Run repository quality checks
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           npm run lint --if-present
-          npm test --if-present
+          node scripts/managed-site/site-test-runner.mjs
           npm run check --if-present
       - name: Audit production dependencies
         if: ${{ hashFiles('package-lock.json') != '' }}
@@ -102,6 +105,33 @@ jobs:
           # The site's own config: the preview is derived from it at deploy
           # time, so this is the shape that actually has to be valid.
           npx wrangler deploy --dry-run
+      # Every edit is held to the same WCAG 2.1 AA bar as the initial build.
+      # An edit can regress a page it never touched - a shared stylesheet
+      # restyle breaks contrast everywhere it cascades - so shared files are
+      # checked against one page of each kind, and changed pages directly,
+      # rather than rescanning every page of a large site on each request.
+      # Repairs land in the same commit as the edit, before anything is published.
+      - name: Install accessibility engine and browser
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.0 axe-core@4.10.2
+          npx playwright install --with-deps chromium
+      - name: Repair accessibility defects in the edit
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_A11Y_MODEL: ${{ vars.OPENROUTER_A11Y_MODEL }}
+          A11Y_MAX_ATTEMPTS: ${{ vars.A11Y_MAX_ATTEMPTS }}
+          A11Y_ENFORCE: ${{ vars.A11Y_ENFORCE }}
+          A11Y_CHANGED_FROM: origin/main
+        run: node scripts/remediate-accessibility.mjs .
+      - name: Upload accessibility evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: accessibility-${{ needs.find-request.outputs.request_id }}
+          path: .site-accessibility.json
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14
       - name: Commit and open or update pull request
         id: git
         env:
@@ -135,17 +165,17 @@ jobs:
       - name: Deploy isolated preview
         id: preview
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
         run: |
           repo_name="${GITHUB_REPOSITORY#*/}"
-          prefix=$(printf '%s' "$repo_name" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')
+          prefix=$(printf '%s' "$repo_name" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-' | cut -c1-37 | sed 's/-*$//')
           preview_name="${prefix}-request-${REQUEST_ID:0:8}"
           # Derived from wrangler.jsonc now, not from a second file written once
           # at provision time. That file copied a fixed list of fields and so
-          # never carried this site's bindings, and every preview of it answered
-          # 404 for anything they served.
+          # never carried the R2 or images bindings, and every preview of a site
+          # that serves photos from R2 answered 404 for all of them.
           PREVIEW_WORKER_NAME="$preview_name" node scripts/managed-site/preview-config.mjs
           npm run build --if-present
           npx wrangler deploy --config wrangler.preview.generated.jsonc | tee deploy-output.txt
@@ -188,7 +218,7 @@ jobs:
       - name: Remove rejected preview
         if: ${{ failure() && steps.preview.outputs.name != '' }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
         # --name, not a positional: the bare form makes wrangler enumerate

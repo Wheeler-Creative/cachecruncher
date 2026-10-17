@@ -5,10 +5,11 @@
   "type": "module",
   "description": "Cache Simulator and Memory Simulator for computer architecture students.",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "test": "node --check src/worker.js",
     "check": "node --check src/worker.js && node --check public/app.js && node scripts/verify-simulator.mjs",
-    "build": "node scripts/compose-site-chrome.mjs"
+    "build": "node scripts/compose-site-chrome.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "cheerio": "^1.1.2",

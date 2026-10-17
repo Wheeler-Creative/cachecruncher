@@ -1,4 +1,6 @@
 name: Promote approved website request
+# Named after the request, so the platform can find the run a dispatch created (src/publish-recovery.js).
+run-name: publish-edit ${{ inputs.request_id }}
 
 on:
   workflow_dispatch:
@@ -39,7 +41,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+      # gh pr checks reads the PR's statusCheckRollup and each check's workflow run; unlisted scopes are "none".
+      actions: read
+      checks: read
+      statuses: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,12 +58,19 @@ jobs:
       - name: Install dependencies
         run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
       - name: Validate approved branch
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           npm run build --if-present
           npm run build:data --if-present
+          node scripts/managed-site/site-test-runner.mjs
           npm run check --if-present
           node --check src/worker.js
           npx wrangler deploy --dry-run
+          if [ -f scripts/managed-site/media-links.mjs ]; then
+            git fetch -q origin main
+            node scripts/managed-site/media-links.mjs --check origin/main
+          fi
       - name: Collect change details
         id: change
         run: |
@@ -67,12 +81,49 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           echo "summary=$(git log -1 --pretty=%s | tr -d '\n' | cut -c1-200)" >> "$GITHUB_OUTPUT"
+      - name: Wait for the accessibility gate on the request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="${{ needs.find-request.outputs.request_branch }}"
+          # The credential-free gate scans the pull request and reports. An
+          # approved request must not merge over a red gate: publishing a
+          # site that fails its own accessibility check is exactly what this
+          # workflow exists to prevent. The gate is path-filtered to pages and
+          # styles, so an edit touching neither (e.g. only a script) registers
+          # no checks; gh reports that as exit 1 "no checks reported", not as
+          # a failed check. Any real failure fails the promotion.
+          log="$RUNNER_TEMP/pr-checks.log"
+          watch_checks() {
+            status=0
+            gh pr checks "$branch" --watch --interval 30 >"$log" 2>&1 || status=$?
+            cat "$log"
+          }
+          no_checks() { [ "$status" -ne 0 ] && grep -q "no checks reported" "$log"; }
+          watch_checks
+          if no_checks; then
+            # A just-opened pull request can register its checks late.
+            sleep 20
+            watch_checks
+          fi
+          if no_checks; then
+            echo "No checks registered on this pull request; continuing."
+            exit 0
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "Checks failed on $branch (exit $status); refusing to merge."
+            exit "$status"
+          fi
       - name: Merge approved pull request
         env:
-          GH_TOKEN: ${{ secrets.MANAGED_SITE_GITHUB_TOKEN }}
+          # The workflow is merging a PR in its own repository. The built-in
+          # token is scoped to exactly that repository and avoids requiring a
+          # separately copied MANAGED_SITE_GITHUB_TOKEN secret on every site.
+          GH_TOKEN: ${{ github.token }}
         run: gh pr merge "${{ needs.find-request.outputs.request_branch }}" --squash --delete-branch
       - name: Deploy merged main branch
         env:
+          GH_TOKEN: ${{ github.token }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
@@ -81,6 +132,8 @@ jobs:
           if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
           npm run build --if-present
           npm run build:data --if-present
+          node scripts/managed-site/site-test-runner.mjs
+          npx wrangler deploy --dry-run
           npx wrangler deploy --keep-vars
       - name: Mark deployed
         env:
@@ -88,12 +141,30 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/managed-site/update-request.mjs deployed
-      - name: Remove preview worker
+      - name: Record which media the deployed site links to
+        if: ${{ hashFiles('scripts/managed-site/media-links.mjs') != '' }}
+        # Already live and marked deployed; the image manager re-reads usage on the next deploy.
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler delete "${{ needs.find-request.outputs.preview_worker_name }}" --no-config --force || true
+        run: node scripts/managed-site/media-links.mjs --publish
+      - name: Remove preview worker
+        if: ${{ needs.find-request.outputs.preview_worker_name != '' }}
+        id: preview_cleanup
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_WORKER_NAME: ${{ needs.find-request.outputs.preview_worker_name }}
+        run: node scripts/managed-site/delete-preview-worker.mjs
+      - name: Record preview cleanup
+        if: ${{ steps.preview_cleanup.outcome == 'success' }}
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/managed-site/update-request.mjs preview-cleaned
       - name: Record site memory
         continue-on-error: true
         env:

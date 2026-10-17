@@ -3,6 +3,10 @@ name: Refresh managed code index
 on:
   push:
     branches: [main]
+    # The owner-content mirror contains values, not code. Indexing it would
+    # waste a job and make an editing model reread mutable customer copy.
+    paths-ignore:
+      - ".wheelerswebsites/**"
   workflow_dispatch:
 
 concurrency:
@@ -26,4 +30,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # A FIRST push starts this workflow before the coordinator processes
+          # site.assemble's completed result and writes site_repositories. Keep
+          # a bounded window for that coordinator handoff and API propagation.
+          INDEX_REGISTRATION_ATTEMPTS: "30"
+          INDEX_REGISTRATION_WAIT_MS: "10000"
         run: node scripts/managed-site/index-code.mjs
