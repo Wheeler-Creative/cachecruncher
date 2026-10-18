@@ -1347,6 +1347,22 @@ async function siteIconSettings(env) {
   siteIconCache = { at: Date.now(), value };
   return value;
 }
+// The brand kit's picture for shared links (docs/brand-kit-plan.md): a page with no og:image of its own gets it.
+let siteBrandCache = null;
+async function siteBrandSettings(env) {
+  if (siteBrandCache && Date.now() - siteBrandCache.at < 60000) return siteBrandCache.value;
+  let value = null;
+  try {
+    const object = env.MEDIA ? await env.MEDIA.get("site-integrations/" + CONTACT_SITE_ID + "/brand.json") : null;
+    value = object ? await object.json() : null;
+  } catch { value = null; }
+  siteBrandCache = { at: Date.now(), value };
+  return value;
+}
+function siteSharePath(brand) {
+  const path = String((brand && brand.share && brand.share.mediaPath) || "").replace(/^[/]+/, "");
+  return /^[A-Za-z0-9][A-Za-z0-9/_. -]{0,300}[.](?:png|jpe?g|webp|gif|avif)$/i.test(path) && path.indexOf("..") < 0 ? path : "";
+}
 function siteIconInitials(name) {
   const words = String(name || "").replace(/[^\p{L}\p{N}\s&-]/gu, " ").split(/[\s&-]+/).filter(Boolean);
   const meaningful = words.filter((word) => !/^(?:the|a|an|of|and|de|la|le|el)$/i.test(word));
@@ -1404,16 +1420,23 @@ function withSiteIcon(handler) {
       const settings = await siteIconSettings(env);
       const chosen = Boolean(settings && settings.mediaPath);
       const version = encodeURIComponent(String((settings && settings.updatedAt) || "1"));
+      const share = siteSharePath(await siteBrandSettings(env));
+      const shareUrl = share ? url.origin + "/images/" + share.split("/").map(encodeURIComponent).join("/") + "?w=1200" : "";
       let hasIcon = false;
+      let hasShare = false;
       return new HTMLRewriter()
         .on("link[rel]", { element(element) {
           if (!/icon/i.test(element.getAttribute("rel") || "")) return;
           if (chosen) element.remove(); else hasIcon = true;
         } })
+        .on('meta[property="og:image"], meta[name="twitter:image"]', { element(element) {
+          if (String(element.getAttribute("content") || "").trim()) hasShare = true;
+        } })
         .on("head", { element(element) {
           element.onEndTag((end) => {
             if (chosen) end.before('<link rel="icon" href="/_ww/icon?v=' + version + '"><link rel="apple-touch-icon" href="/_ww/icon?size=180&v=' + version + '">', { html: true });
             else if (!hasIcon) end.before('<link rel="icon" href="/_ww/icon?v=' + version + '">', { html: true });
+            if (shareUrl && !hasShare) end.before('<meta property="og:image" content="' + shareUrl.replace(/"/g, "&quot;") + '"><meta name="twitter:image" content="' + shareUrl.replace(/"/g, "&quot;") + '">', { html: true });
           });
         } })
         .transform(response);

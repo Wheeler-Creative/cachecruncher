@@ -231,6 +231,26 @@ export function advertiseRules(response, env) {
   }
 }
 
+// SECURITY HEADERS ON EVERY PAGE THE RUNTIME SERVES. The portal sends them (src/security-headers.js); a site's Worker
+// did not, and fleet health measured eight sites without them (2026-10-17). Set only where the site has not set its
+// own (a _headers file or its own routes win), and only on HTML: a stylesheet or a photograph has nothing to protect.
+// Framing is limited to the site itself and the portal, which shows the site in its preview frame.
+export const SITE_FRAME_ANCESTORS = "frame-ancestors 'self' https://jaybirddigital.com https://*.jaybirddigital.com";
+export function withSiteSecurityHeaders(response) {
+  if (!response || !/html/i.test(response.headers?.get?.("content-type") || "")) return response;
+  const csp = response.headers.get("content-security-policy") || "";
+  const missing = {
+    "x-content-type-options": response.headers.has("x-content-type-options") ? null : "nosniff",
+    "referrer-policy": response.headers.has("referrer-policy") ? null : "strict-origin-when-cross-origin",
+    "content-security-policy": response.headers.has("x-frame-options") || /frame-ancestors/i.test(csp) ? null
+      : (csp ? `${csp.replace(/;\s*$/, "")}; ${SITE_FRAME_ANCESTORS}` : SITE_FRAME_ANCESTORS)
+  };
+  if (!Object.values(missing).some(Boolean)) return response;
+  const out = new Response(response.body, response);
+  for (const [name, value] of Object.entries(missing)) if (value) out.headers.set(name, value);
+  return out;
+}
+
 export function withSiteContent(handler, options = {}) {
   const read = siteContentReader(options);
   const siteId = /^site-content\/([^/]+)\.json$/.exec(options.key || "")?.[1];
@@ -295,7 +315,9 @@ export function withSiteContent(handler, options = {}) {
     // Everything else the Worker exports - scheduled, queue, email - is kept
     // as it was. Only fetch is wrapped.
     ...handler,
-    async fetch(request, env, ctx) {
+    async fetch(request, env, ctx) { return withSiteSecurityHeaders(await serve(request, env, ctx)); }
+  };
+  async function serve(request, env, ctx) {
       let response = null;
       const accounts = siteId ? customerAccountSnapshot(await readAccounts(env).catch(() => null), siteId) : null;
       response = await customerAccountRoute(request, env, { siteId, snapshot: accounts, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
@@ -455,6 +477,5 @@ export function withSiteContent(handler, options = {}) {
       // A page with an outline drawn on it is not the page: never index it,
       // and never let a cache serve it to somebody who did not ask for it.
       return markPreviewResponse(resolved);
-    }
-  };
+  }
 }
