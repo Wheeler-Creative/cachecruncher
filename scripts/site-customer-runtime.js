@@ -1,10 +1,12 @@
 // This module ships with customer Workers. Private data stays behind the platform API.
 import { composeCollectionPage } from './collection-pages-site.js';
-export const CUSTOMER_RUNTIME_VERSION = 3;
+export const CUSTOMER_RUNTIME_VERSION = 4;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
-const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'scheduler-ui.js', 'booking.js', 'jaybird-logo.png']);
+// The booking page's bundle is the portal's: its modules and stylesheets are fetched from the platform origin by name.
+const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
+  'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
 export function customerAccountSnapshot(text, siteId) {
   try { const value = JSON.parse(text || '{}'); return value.version === 1 && value.siteId === siteId && value.enabled === true ? value : null; } catch { return null; }
 }
@@ -47,8 +49,10 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
       } catch { return reply('Invalid request.', 400); }
     }
     try {
+      // The connecting address rides along as advice for the platform's request budgets (it is never a security bound).
+      const client = String(request.headers.get('cf-connecting-ip') || '').slice(0, 60);
       const upstream = await fetch(destination, { method: request.method, redirect: 'manual', headers: { 'content-type': 'application/json', accept: 'application/json', origin: url.origin,
-        ...(request.headers.get('authorization') ? { authorization: request.headers.get('authorization') } : {}) }, ...(body ? { body } : {}), signal: AbortSignal.timeout(20000) });
+        ...(client ? { 'x-ww-client-ip': client } : {}), ...(request.headers.get('authorization') ? { authorization: request.headers.get('authorization') } : {}) }, ...(body ? { body } : {}), signal: AbortSignal.timeout(20000) });
       if (upstream.status >= 300 && upstream.status < 400) { await upstream.body?.cancel(); return reply('Your account is temporarily unavailable.', 503); }
       return new Response(upstream.body, { status: upstream.status, headers: { ...privateHeaders, 'content-type': 'application/json; charset=utf-8' } });
     } catch { return reply('Your account is temporarily unavailable.', 503); }
@@ -69,7 +73,9 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
   if (!/<main(?:\s|>)/i.test(html)) return reply('The website needs an account layout before accounts can be displayed.', 409);
   const section = path.split('/')[2] || 'summary';
   const body = `<section class="ww-customer-account" data-ww-customer-site="${escape(siteId)}" data-ww-account-section="${escape(section)}"><nav aria-label="Customer account"><a href="/">Website</a> <a href="/_account/">My account</a> <a id="website-link" href="/" hidden>Visit website</a></nav><h1 id="title">${booking ? 'Reservations' : 'My account'}</h1><p id="intro">Loading…</p><div id="content"></div><p id="status" role="status" aria-live="polite"></p><noscript>Enable JavaScript to sign in and manage your account.</noscript></section>`;
-  const head = `<meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/_account/assets/customer-account.css"><script type="module" src="/_account/assets/${booking ? 'booking.js' : 'customer-account.js'}"></script>`;
+  // The booking page wears the same stylesheets mounted and standalone (scheduler.css, booking.css) over the site's own
+  // customer-account theme; portal.css stays on the portal, since its :root tokens would restyle the website around it.
+  const head = `<meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/_account/assets/customer-account.css">${booking ? '<link rel="stylesheet" href="/_account/assets/scheduler.css"><link rel="stylesheet" href="/_account/assets/booking.css">' : ''}<script type="module" src="/_account/assets/${booking ? 'booking.js' : 'customer-account.js'}"></script>`;
   const page = composeCollectionPage(home, { head, body }, { title: booking ? 'Reservations' : 'My account', origin: url.origin, canonical: new URL(path, url.origin).href, keepMain: true });
   const headers = new Headers(page.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
   headers.delete('content-security-policy');
