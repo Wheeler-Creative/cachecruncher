@@ -4,6 +4,10 @@
 //   sites/<site id>/<name>.<ext>        images: the site's image folder, served
 //                                       at /images/<name>, where owner uploads go
 //   sites/<site id>/files/<name>.<ext>  fonts, stylesheets, documents, video
+//   sites/<site id>/products/<name>     a shop's product pictures, served at
+//                                       /images/products/<name>; they belong to
+//                                       the products that show them, never the
+//                                       photo library
 //   sites/<site id>/<folder>/...        build internals (snapshots, blueprints,
 //                                       raw source pages, meta) - never media
 //
@@ -15,7 +19,17 @@ export const VIDEO_EXTENSIONS = new Set(Object.keys(VIDEO_TYPES));
 // The two formats every current browser plays: the only ones the uploader takes, and the only ones a page is offered.
 export const PLAYABLE_VIDEO_TYPES = new Set(["video/mp4", "video/webm"]);
 export const FILES_FOLDER = "files/";
+export const PRODUCT_FOLDER = "products/";
 export const MEDIA_USAGE_KEY = "meta/media-usage.json";
+// Imported product pictures were kept beside the site's own before the product folder existed.
+const EARLIER_PRODUCT_PICTURE = /^shop-import-[0-9a-f]{16}-[0-9a-f]{16}\.(?:jpg|png|webp|gif)$/;
+
+export function isProductPictureKey(relativeKey) {
+  const key = String(relativeKey || "");
+  if (!key || key.includes("..")) return false;
+  return (key.startsWith(PRODUCT_FOLDER) && key.length > PRODUCT_FOLDER.length && !key.slice(PRODUCT_FOLDER.length).includes("/"))
+    || EARLIER_PRODUCT_PICTURE.test(key);
+}
 // Below this an "image" is a tracking pixel or spacer, not something to manage.
 export const MIN_LIBRARY_IMAGE_BYTES = 100;
 
