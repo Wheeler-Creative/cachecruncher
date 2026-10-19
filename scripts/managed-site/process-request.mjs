@@ -57,7 +57,7 @@ async function fetchRequest() {
 }
 
 async function openRouterJson(name, schema, messages) {
-  const models = [...new Set([process.env.OPENROUTER_BUILD_MODEL, process.env.OPENROUTER_ESCALATION_MODEL].filter(Boolean))];
+  const models = [...new Set([process.env.OPENROUTER_BUILD_MODEL, process.env.OPENROUTER_BUILD_FALLBACK_MODEL].filter(Boolean))];
   let lastError;
   for (const model of models) {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {

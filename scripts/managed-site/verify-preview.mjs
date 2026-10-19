@@ -112,7 +112,7 @@ async function verifyWithVision(request, evidence) {
       "x-title": "Jaybird Digital Visual QA"
     },
     body: JSON.stringify({
-      model: process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_MODEL || "google/gemini-3.1-flash-lite",
+      model: process.env.OPENROUTER_VISION_MODEL || process.env.OPENROUTER_BUILD_FALLBACK_MODEL,
       temperature: 0,
       response_format: {
         type: "json_schema",

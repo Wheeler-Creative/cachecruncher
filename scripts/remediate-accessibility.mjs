@@ -29,7 +29,7 @@ const log = buildLog("a11y");
 // A11Y_SCAN_DIR is where the pages to scan are (a shared-layout site composes them into dist/).
 const publicDir = path.join(target, process.env.A11Y_SCAN_DIR || "public");
 const maxAttempts = clampInt(process.env.A11Y_MAX_ATTEMPTS, 3, 1, 6);
-const model = process.env.OPENROUTER_A11Y_MODEL || process.env.OPENROUTER_BUILD_MODEL || "moonshotai/kimi-k2";
+const model = process.env.OPENROUTER_A11Y_MODEL || process.env.OPENROUTER_BUILD_MODEL || process.env.OPENROUTER_BUILD_FALLBACK_MODEL;
 const apiKey = process.env.OPENROUTER_API_KEY;
 // Escape hatch for an emergency deploy. Off by default: the whole point is that
 // an inaccessible site cannot reach a nonprofit's visitors.

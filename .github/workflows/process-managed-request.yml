@@ -82,6 +82,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_CODER_MODEL: ${{ vars.OPENROUTER_CODER_MODEL }}
+          OPENROUTER_BUILD_FALLBACK_MODEL: ${{ vars.OPENROUTER_BUILD_FALLBACK_MODEL }}
         run: node scripts/managed-site/process-request.mjs
       - name: Build generated site data
         run: |
@@ -119,6 +120,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_A11Y_MODEL: ${{ vars.OPENROUTER_A11Y_MODEL }}
+          OPENROUTER_BUILD_FALLBACK_MODEL: ${{ vars.OPENROUTER_BUILD_FALLBACK_MODEL }}
           A11Y_MAX_ATTEMPTS: ${{ vars.A11Y_MAX_ATTEMPTS }}
           A11Y_ENFORCE: ${{ vars.A11Y_ENFORCE }}
           A11Y_CHANGED_FROM: origin/main
@@ -194,7 +196,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_BUILD_FALLBACK_MODEL: ${{ vars.OPENROUTER_BUILD_FALLBACK_MODEL }}
           OPENROUTER_VISION_MODEL: ${{ vars.OPENROUTER_VISION_MODEL }}
         run: node scripts/managed-site/verify-preview.mjs
       - name: Upload visual verification evidence
