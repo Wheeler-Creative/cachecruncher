@@ -7,14 +7,18 @@
 //   node scripts/managed-site/media-links.mjs --publish
 //     Records what the deployed code links to, which is how the image manager
 //     knows what is in use. Needs CLOUDFLARE_API_TOKEN.
+//
+// What counts as a link is one rule shared with the platform (media-layout.js): the site's own source files, not the
+// build's copy of them (dist/), not the sitemap or robots.txt (they list addresses and are made from the pages), and
+// only a link that is root-relative or on one of the site's own hosts (a supplier's /images/x is not our file).
 import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { MEDIA_USAGE_KEY, isCentralKey, mediaReferences } from "./media-layout.js";
+import { MEDIA_USAGE_KEY, isBuiltOutputFile, isCentralKey, isSitemapFile, mediaReferences, siteOwnHostsFromFiles } from "./media-layout.js";
 
 const TEXT_FILE = /\.(?:html?|css|m?js|json|jsonc|xml|txt|svg|webmanifest)$/i;
-const SKIP = new Set([".git", ".github", ".wrangler", "node_modules", "docs", "scripts"]);
+const SKIP = new Set([".git", ".github", ".wrangler", "node_modules", "docs", "scripts", "dist"]);
 // Dot-entries are builder metadata (.site-generation.json), not served site content.
 const skipped = (file) => file.split("/").some((part) => SKIP.has(part) || part.startsWith("."));
 
@@ -41,15 +45,28 @@ function filesAt(ref) {
     .map((file) => [file, git("show", `${ref}:${file}`)]);
 }
 
-function usageOf(files) {
+// The record is: for each stored file, how many of the site's own files link to it. `files` is [[path, text]].
+function usageOf(files, extraFiles = []) {
+  const ownHosts = siteOwnHostsFromFiles([...files, ...extraFiles]);
   const usage = new Map();
   for (const [file, text] of files) {
-    for (const key of mediaReferences(text)) {
+    if (isSitemapFile(file) || isBuiltOutputFile(file)) continue;
+    for (const key of mediaReferences(text, new Set(), { ownHosts })) {
       if (!usage.has(key)) usage.set(key, new Set());
       usage.get(key).add(file);
     }
   }
   return usage;
+}
+
+// The site's address can be named only in its wrangler file; .toml is not a text file the scan reads.
+async function wranglerFiles() {
+  const found = [];
+  for (const name of ["wrangler.toml"]) {
+    const text = await readFile(name, "utf8").catch(() => "");
+    if (text) found.push([name, text]);
+  }
+  return found;
 }
 
 // Site repositories carry only the API token secret; wrangler finds the account
@@ -74,7 +91,8 @@ async function publish(siteId, usage) {
   const key = `sites/${siteId}/${MEDIA_USAGE_KEY}`;
   const images = Object.fromEntries([...usage].sort(([a], [b]) => a.localeCompare(b))
     .map(([name, files]) => [name, { uses: files.size, pages: [...files].sort().slice(0, 5) }]));
-  const body = JSON.stringify({ version: 1, generatedAt: new Date().toISOString(), commit: process.env.GITHUB_SHA || null, images });
+  // reading 2: sitemaps, the build's copy and other hosts' links are not counted (an older record counted them).
+  const body = JSON.stringify({ version: 1, reading: 2, generatedAt: new Date().toISOString(), commit: process.env.GITHUB_SHA || null, images });
   const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/r2/buckets/sharedbucket/objects/${key.split("/").map(encodeURIComponent).join("/")}`;
   for (let attempt = 1; ; attempt += 1) {
     const response = await fetch(url, { method: "PUT", body, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" } });
@@ -91,7 +109,8 @@ async function main() {
     console.log("This site does not use the shared media storage; nothing to check.");
     return;
   }
-  const head = usageOf(await workingFiles());
+  const extra = await wranglerFiles();
+  const head = usageOf(await workingFiles(), extra);
 
   if (process.argv.includes("--publish")) {
     await publish(siteId, head);
@@ -101,7 +120,7 @@ async function main() {
 
   const base = process.argv[process.argv.indexOf("--check") + 1];
   if (!process.argv.includes("--check") || !base) throw new Error("Usage: --check <base ref> | --publish");
-  const before = usageOf(filesAt(base));
+  const before = usageOf(filesAt(base), extra);
   const outside = (usage, only) => [...usage.keys()].filter((key) => !isCentralKey(key) && only(key)).sort();
   const added = outside(head, (key) => !before.has(key));
   const inherited = outside(head, (key) => before.has(key));

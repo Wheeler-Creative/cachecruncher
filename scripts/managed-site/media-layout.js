@@ -150,10 +150,41 @@ function cleanKey(raw) {
   return key && !key.startsWith("/") && !key.includes("..") ? key : "";
 }
 
-// Every stored key a text mentions. Deliberately generous (any host), because
-// it decides what must NOT be deleted.
-export function mediaReferences(text, into = new Set()) {
-  for (const match of String(text || "").matchAll(ANYWHERE)) {
+// The sitemap lists addresses (and sometimes pictures) for search engines, and is made from the pages. It is never a
+// reason to keep a picture or a place a picture is used. robots.txt only points at it.
+export function isSitemapFile(file) {
+  return /(?:^|\/)(?:sitemap[^/]*\.xml|robots\.txt)$/i.test(String(file || "").replace(/\\/g, "/"));
+}
+
+// What a site's build writes (dist/ holds a copy of every page): counting it would count each link twice, and a link
+// left in an old build would outlive the page that had it.
+export function isBuiltOutputFile(file) {
+  return /(?:^|\/)dist\//i.test(String(file || "").replace(/\\/g, "/"));
+}
+
+// Characters that end a web address in the middle of a text: quotes, brackets, spaces, commas and the equals sign of
+// an unquoted attribute.
+const ADDRESS_END = /[\s"'<>()[\]{}|\\^`,=]/;
+
+// The address a link at `index` is written inside, when that address names a host ("https://h/a/images/x" or
+// "//h/images/x"); "" for a link that is root-relative or relative.
+function hostPartBefore(text, index) {
+  let start = index;
+  while (start > 0 && index - start < 400 && !ADDRESS_END.test(text[start - 1])) start -= 1;
+  const token = text.slice(start, index);
+  return /^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/?#]+/i.test(token) ? token : "";
+}
+
+// Every stored key a text mentions. Without `ownHosts` it is deliberately generous (any host), because it decides
+// what must NOT be deleted. With `ownHosts` (what a site records as its use of a picture) a link counts only when it
+// is root-relative or on one of the site's own hosts: a supplier's "https://other.example/images/x" is not our file.
+export function mediaReferences(text, into = new Set(), { ownHosts = null } = {}) {
+  const source = String(text || "");
+  for (const match of source.matchAll(ANYWHERE)) {
+    if (ownHosts) {
+      const address = hostPartBefore(source, match.index);
+      if (address && isForeignMediaUrl(address, ownHosts)) continue;
+    }
     const key = cleanKey(match[2]);
     if (key) {
       into.add(key);
@@ -243,4 +274,37 @@ export function jsonMediaReferences(value, known, into = new Set(), ownHosts = n
   };
   visit(value);
   return into;
+}
+
+// Hosts that serve a site's own storage, read from the site's own files: the address its pages name as their own
+// (canonical and og:url links), its sitemap and robots.txt, the routes in its wrangler file, and workers.dev always.
+// `files` is [[path, text]] and may include the wrangler file. `extra` lists hosts the caller already knows. A www
+// address and its bare twin are one site. An absolute link on any other host (a supplier's cover) is not a stored key.
+export function siteOwnHostsFromFiles(files = [], extra = []) {
+  const hosts = new Set(["*.workers.dev"]);
+  const add = (value) => {
+    const host = /^(?:https?:)?\/\/([^/?#\s"'<>]+)/i.exec(String(value || "").trim())?.[1]?.replace(/^[^@]*@/, "").replace(/:\d+$/, "").toLowerCase();
+    if (!host) return;
+    hosts.add(host);
+    hosts.add(host.startsWith("www.") ? host.slice(4) : `www.${host}`);
+  };
+  for (const entry of extra) {
+    const host = String(entry || "").trim().toLowerCase();
+    if (!host) continue;
+    if (host.startsWith("*.") || host.startsWith(".")) hosts.add(host);
+    else add(`//${host}`);
+  }
+  for (const [file, text] of files) {
+    const name = String(file || "").replace(/\\/g, "/");
+    if (isSitemapFile(name)) {
+      for (const match of String(text).matchAll(/(?:<loc>|Sitemap:\s*)\s*(https?:\/\/[^<\s]+)/gi)) add(match[1]);
+    } else if (/(?:^|\/)wrangler\.(?:jsonc?|toml)$/i.test(name)) {
+      for (const match of String(text).matchAll(/(?:pattern|route)["']?\s*[:=]\s*["']([^"'/*]+)/gi)) add(`//${match[1]}`);
+    } else if (/\.html?$/i.test(name) && !isBuiltOutputFile(name)) {
+      for (const match of String(text).matchAll(/<(?:link\b[^>]*rel=["']canonical["'][^>]*|meta\b[^>]*property=["']og:url["'][^>]*)>/gi)) {
+        add(/(?:href|content)=["']([^"']+)["']/i.exec(match[0])?.[1] || "");
+      }
+    }
+  }
+  return [...hosts];
 }

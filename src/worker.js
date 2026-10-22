@@ -555,7 +555,17 @@ function projectShopCatalog(snapshot, params) {
       attributes.set(name, facet);
     }
   }
-  for (const [key, value] of params) if (key.startsWith("attr.")) rows = rows.filter((row) => [].concat(attributesOf(row)[key.slice(5)] || []).map(String).includes(value));
+  // One attr.<Detail> parameter: a value, A|B for any of several, !A|B for none of them (a store menu's limited list).
+  // Written inline: this function is copied into every site's server, so nothing outside it travels with it.
+  // A value some product really has, exactly as written (a detail called "!Hot" or "Fast|Loud"), is that value and nothing else.
+  for (const [key, value] of params) if (key.startsWith("attr.")) {
+    const exact = Boolean(attributes.get(key.slice(5))?.has(value));
+    const none = !exact && value.startsWith("!"), wanted = exact ? [value] : (none ? value.slice(1) : value).split("|");
+    rows = rows.filter((row) => {
+      const have = [].concat(attributesOf(row)[key.slice(5)] || []).map(String);
+      return none ? !wanted.some((item) => have.includes(item)) : wanted.some((item) => have.includes(item));
+    });
+  }
   const groups = new Map();
   for (const row of rows) {
     const key = row.sourceKey || row.id;
