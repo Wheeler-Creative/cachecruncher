@@ -49,7 +49,12 @@ jobs:
   # browser below. A fork's pull request never gets one.
   accessibility:
     runs-on: ${{ contains(format(' {0} ', vars.AWS_RUNNERS), ' accessibility-gate ') && (github.event.pull_request.head.repo.full_name || github.repository) == github.repository && fromJSON('["self-hosted","jaybird-aws","jaybird-aws-medium"]') || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    # A full scan of a big site is slow: Career Hunter (62 pages) and Roosevelt
+    # Library spent 16-18 minutes in the repair step alone and their weekly runs
+    # were cut off at the old 20 (2026-10-22). Most of that is the contrast
+    # rounds on pages whose stylesheets only the deployed site serves, which
+    # rescan each such page up to three more times.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
