@@ -95,5 +95,11 @@
     {
       "binding": "SITE_API"
     }
+  ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "FORM_CHECKS",
+      "dataset": "jaybird_form_checks"
+    }
   ]
 }

@@ -80,7 +80,7 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
   const headers = new Headers(page.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
   headers.delete('content-security-policy');
   // Preserve arbitrary website assets while limiting the customer component's auth connections.
-  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh https://challenges.cloudflare.com https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://esm.sh; frame-src https://challenges.cloudflare.com https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://esm.sh; frame-src https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.recaptcha.net https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
   return new Response(request.method === 'HEAD' ? null : page.body, { headers });
 }
 export function addCustomerAccountNav(response, snapshot, siteId) {

@@ -65,14 +65,13 @@ export function buttonClass(value) {
   return tokens.length && tokens.length <= 6 ? tokens.join(" ") : "";
 }
 
-export function renderSignupForm(settings, { language = "en", mainLanguage = true, turnstileSiteKey = "", buttonClass: look = "" } = {}) {
+// formCheck is the site's bot check for this form, drawn by its Worker (scripts/form-check-rewriter.js): the field or
+// box, Google's notice and the loader, or Turnstile's box and script.
+export function renderSignupForm(settings, { language = "en", mainLanguage = true, formCheck = "", buttonClass: look = "" } = {}) {
   const words = wordsFor(language);
   const heading = mainLanguage && settings.heading ? settings.heading : words.heading;
   const id = "ww-signup-email";
-  const check = turnstileSiteKey
-    ? `<div class="cf-turnstile" data-sitekey="${escape(turnstileSiteKey)}" data-action="subscribe" id="ww-signup-check"></div>`
-      + "<script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer></script>"
-    : "";
+  const check = String(formCheck || "").replace('<div class="cf-turnstile"', '<div id="ww-signup-check" class="cf-turnstile"');
   return `${STYLE}<section class="ww-signup" data-ww-signup-drawn aria-labelledby="ww-signup-title"><div class="ww-signup-inner">`
     + `<h2 id="ww-signup-title">${escape(heading)}</h2>`
     + `<form method="post" action="/api/subscribe" data-ww-signup-form data-ww-subscription-ready novalidate`
@@ -93,11 +92,11 @@ const SKIP = /^\/(?:checkout|cart|account|orders|_ww|api)(?:\/|$)/;
 // The page with the form drawn just above the site's footer - the first <footer> that is not inside the page's own
 // content - or at the end of <body> when the site has none. A page whose content already holds a signup form is left
 // alone; one whose footer holds one gets the form and the script takes it away again.
-export function addSignupForm(response, settings, { language = "en", mainLanguage = true, turnstileSiteKey = "", pathname = "/" } = {}) {
+export function addSignupForm(response, settings, { language = "en", mainLanguage = true, formCheck = "", pathname = "/" } = {}) {
   if (!settings?.enabled || settings.form !== "footer" || SKIP.test(pathname) || typeof HTMLRewriter === "undefined") return response;
   if (!response?.ok || !String(response.headers?.get?.("content-type") || "").includes("text/html")) return response;
   let inside = 0, placed = false, ownForm = false, look = null;
-  const form = () => renderSignupForm(settings, { language, mainLanguage, turnstileSiteKey, buttonClass: look || "" });
+  const form = () => renderSignupForm(settings, { language, mainLanguage, formCheck, buttonClass: look || "" });
   return new HTMLRewriter()
     .on("main, article", { element(element) {
       inside += 1;

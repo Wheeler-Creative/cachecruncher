@@ -271,9 +271,17 @@ export async function localLinkIssues(html, route, siteRoot = null, fileOverride
   return issues;
 }
 
+// A page never brings its own captcha: the site's Worker gives every managed form its check (reCAPTCHA by default,
+// scripts/form-check-rewriter.js) when the page is served, and a second widget or script fights it for the form.
+export const OWN_CAPTCHA_SCRIPT = /(?:google\.com|gstatic\.com|recaptcha\.net)\/recaptcha\/|hcaptcha\.com\/|challenges\.cloudflare\.com\/turnstile/i;
+export const OWN_CAPTCHA_MARKUP = ".g-recaptcha,.h-captcha,.cf-turnstile,[data-sitekey]";
+
 export function formIssues(html) {
   const issues = [];
   const $ = load(String(html || ""));
+  if ($("script[src]").toArray().some((node) => OWN_CAPTCHA_SCRIPT.test($(node).attr("src") || "")) || $(OWN_CAPTCHA_MARKUP).length) {
+    issues.push("page carries its own captcha; managed forms get the site's own form check, and a second one breaks it");
+  }
   $("form").each((_, node) => {
     const form = $(node);
     const action = String(form.attr("action") || "").trim();

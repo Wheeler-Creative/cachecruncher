@@ -451,7 +451,9 @@ export function withSiteContent(handler, options = {}) {
           const signupLanguage = (options.languagePrefixes || []).find((code) => faqPath.startsWith(`/${code}/`) || faqPath === `/${code}`);
           response = addSignupForm(response, await signupsFor(env), {
             language: signupLanguage || options.language || "en", mainLanguage: !signupLanguage, pathname: faqPath,
-            turnstileSiteKey: env?.TURNSTILE_SITE_KEY && env?.TURNSTILE_SECRET_KEY ? String(env.TURNSTILE_SITE_KEY) : ""
+            // The band's own bot check, from the site's Worker (scripts/form-check-rewriter.js): the band is drawn after the
+            // page's forms were given theirs. A Worker that passes none draws the band without one.
+            formCheck: typeof options.formCheck === "function" ? String(options.formCheck(env || {}, signupLanguage || options.language || "en") || "") : ""
           });
         } catch { /* the page without the drawn form */ }
       }

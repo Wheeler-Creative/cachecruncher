@@ -1,6 +1,6 @@
 import { evaluateSubmission, MAX_PAYLOAD_BYTES } from "../scripts/contact-form-lib.mjs";
 import { withSiteContent } from "../scripts/site-content-worker.js";
-import { withManagedFormCheck } from "../scripts/form-check-rewriter.js";
+import { formCheckCapabilities, formCheckFields, formCheckLoader, formCheckSettings, takeFormCheckToken, verifyFormCheck, withManagedFormCheck } from "../scripts/form-check-rewriter.js";
 import { siteRoutes } from "./site-routes.js";
 import { SITE_API_PREFIX, siteApiEgress, siteApiResponse } from "../scripts/site-api-runtime.js";
 // Text, not code: wrangler.jsonc carries this file in as a string, and it runs in an isolate of its own.
@@ -54,37 +54,16 @@ const MAX_WIDTH = 2000;
 const CACHE_VERSION = "2";
 const FORMATS = { webp: "image/webp", avif: "image/avif", jpeg: "image/jpeg", png: "image/png" };
 
-async function validateTurnstileToken(token, secret, request, action) {
-  if (typeof token !== "string" || !token || token.length > 2048) return false;
-  try {
-    const form = new URLSearchParams({ secret, response: token });
-    const remoteIp = request.headers.get("cf-connecting-ip");
-    if (remoteIp) form.set("remoteip", remoteIp);
-    const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: form
-    });
-    const result = await response.json().catch(() => null);
-    return response.ok && result?.success === true
-      && String(result?.hostname || "").toLowerCase() === new URL(request.url).hostname.toLowerCase()
-      && result?.action === action;
-  } catch {
-    return false;
-  }
+// The managed forms' bot check (scripts/form-check-rewriter.js): reCAPTCHA, Turnstile or none, read from secrets.
+async function managedFormCheck(body, env, request, action) {
+  const check = await verifyFormCheck(takeFormCheckToken(body), env, request, action);
+  return check?.status ? check : null;
 }
 
-async function managedFormCheck(body, env, request, action) {
-  if (!env.TURNSTILE_SITE_KEY && !env.TURNSTILE_SECRET_KEY) return null;
-  if (!env.TURNSTILE_SITE_KEY || !env.TURNSTILE_SECRET_KEY) {
-    return { status: 503, message: "The form security check is unavailable. Please try again shortly." };
-  }
-  const token = body && typeof body === "object" ? body["cf-turnstile-response"] : null;
-  if (body && typeof body === "object") delete body["cf-turnstile-response"];
-  if (!(await validateTurnstileToken(token, env.TURNSTILE_SECRET_KEY, request, action))) {
-    return { status: 400, message: "Please complete the security check and try again." };
-  }
-  return null;
+// The footer signup band is drawn by the content layer after the page's forms were given their check, so it asks here.
+function signupFormCheck(env, language) {
+  const settings = formCheckSettings(env);
+  return settings && !settings.incomplete ? formCheckFields(settings, "subscribe", language) + formCheckLoader(settings) : "";
 }
 
 function imageCacheKey(request, url) {
@@ -1115,11 +1094,7 @@ async function handleContact(request, env, ctx) {
   if ((!platformDelivery && (!CONTACT_CONFIGURED || !env.EMAIL)) || !env.CONTACT_ACTOR_RATE || !env.CONTACT_SITE_RATE) return new Response("Not found", { status: 404 });
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
   const parsed = await contactBody(request);
-  const turnstileToken = parsed.body && typeof parsed.body === "object" && !Array.isArray(parsed.body)
-    ? parsed.body["cf-turnstile-response"] : null;
-  if (parsed.body && typeof parsed.body === "object" && !Array.isArray(parsed.body)) {
-    delete parsed.body["cf-turnstile-response"];
-  }
+  const formCheckToken = takeFormCheckToken(parsed.body);
   const result = evaluateSubmission({
     ...parsed,
     ip: request.headers.get("cf-connecting-ip") || "unknown",
@@ -1144,14 +1119,15 @@ async function handleContact(request, env, ctx) {
   // The platform's setup test carries a one-time proof the platform itself checks before delivering, so it skips the
   // visitor check here; a made-up proof only gets the message refused by the platform.
   const proof = platformDelivery ? String(request.headers.get(FORM_PROOF_HEADER) || "").slice(0, 200) : "";
-  if (!proof && (env.TURNSTILE_SITE_KEY || env.TURNSTILE_SECRET_KEY)) {
-    if (!env.TURNSTILE_SITE_KEY || !env.TURNSTILE_SECRET_KEY) {
-      return contactResponse({ response: { ok: false, message: "The form security check is unavailable. Please try again shortly.", field: null }, status: 503 }, request, 503, env);
-    }
-    if (!(await validateTurnstileToken(turnstileToken, env.TURNSTILE_SECRET_KEY, request, "contact"))) {
-      return contactResponse({ response: { ok: false, message: "Please complete the security check and submit the form again.", field: null }, status: 400 }, request, 400, env);
-    }
+  const formCheck = proof ? null : await verifyFormCheck(formCheckToken, env, request, "contact");
+  if (formCheck?.status === 503) {
+    return contactResponse({ response: { ok: false, message: formCheck.message, field: null }, status: 503 }, request, 503, env);
   }
+  if (formCheck?.status) {
+    return contactResponse({ response: { ok: false, message: "Please complete the security check and submit the form again.", field: null }, status: 400 }, request, 400, env);
+  }
+  // Google could not be asked, so the message goes through and tells the owner it was not checked.
+  if (formCheck?.unverified && result.outcome === "deliver" && result.email) result.email = uncheckedEmail(result.email);
 
   console.log(JSON.stringify({ event: result.log.event, outcome: result.log.outcome, discardReason: result.log.discardReason, bytes: result.log.bytes }));
   if (proof) {
@@ -1175,6 +1151,13 @@ async function handleContact(request, env, ctx) {
 async function formTokenKey(token) {
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token))));
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 12);
+}
+
+const UNCHECKED_NOTE = "Note: the spam check could not be reached when this was sent, so it was delivered without one.";
+function uncheckedEmail(email) {
+  return { ...email,
+    text: UNCHECKED_NOTE + "\n\n" + String(email.text || ""),
+    html: String(email.html || "").replace("<body>", "<body><p><em>" + UNCHECKED_NOTE + "</em></p>") };
 }
 
 async function deliverThroughPlatform(env, email, proof) {
@@ -1459,13 +1442,13 @@ const siteRequestHandler = {
       return Response.json({
         siteId: CONTACT_SITE_ID,
         turnstile: true,
-        formCheckVersion: 2,
+        ...formCheckCapabilities(env),
         contactForm: CONTACT_CONFIGURED,
         formDelivery: 1,
         platformDelivery: Boolean(env.WW_FORM_DELIVERY_TOKEN),
         // A short key of the token, so the platform can tell a stale one and replace it; it reveals nothing usable.
         ...(env.WW_FORM_DELIVERY_TOKEN ? { platformDeliveryKey: await formTokenKey(env.WW_FORM_DELIVERY_TOKEN) } : {}),
-        turnstileEnabled: Boolean(env.TURNSTILE_SITE_KEY && env.TURNSTILE_SECRET_KEY),
+        turnstileEnabled: formCheckCapabilities(env).formCheckProvider === "turnstile",
         siteApi: SITE_API_PREFIX
       }, {
         headers: { "cache-control": "no-store" }
@@ -1585,7 +1568,7 @@ const siteRequestHandler = {
     // Google reads Link: rel="canonical" exactly as it reads the tag, and doing
     // it in a header costs nothing: the HTML is not parsed or rewritten.
     const response = withManagedFormCheck(
-      await addOrderHistoryNavigation(await addCommerceNavigation(await env.ASSETS.fetch(request), env), env), env
+      await addOrderHistoryNavigation(await addCommerceNavigation(await env.ASSETS.fetch(request), env), env), env, request
     );
     const type = response.headers.get("content-type") || "";
     if (!type.includes("text/html") || !response.ok) return response;
@@ -1606,7 +1589,8 @@ const siteHandler = withSiteIcon(siteRequestHandler);
 // that is not an HTML page passes straight through.
 export default withSiteContent(siteHandler, {
   key: "site-content/b97ce281-ffaf-4808-b4d6-9778c1d2d95e.json",
-  binding: "MEDIA"
+  binding: "MEDIA",
+  formCheck: signupFormCheck
 });
 
 // BEGIN MANAGED SHOP COLLECTIONS
