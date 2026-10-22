@@ -733,15 +733,41 @@ async function serveCommerceProductPage(request, env, pathname) {
     + '<h1>' + escapeStoreHtml(product.title) + '</h1>' + storePriceMarkup([product]) + '<p class="ww-store-description">' + escapeStoreHtml(product.description) + '</p>'
     + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + escapeStoreHtml(product.title) + '" loading="eager">' : '')
     + (product.catalog?.releaseAt ? '<p>Expected release: <time datetime="' + escapeStoreHtml(product.catalog.releaseAt) + '">' + escapeStoreHtml(product.catalog.releaseDate || product.catalog.releaseAt.slice(0, 10)) + '</time></p>' : '')
-    + publicationMarkup + '<p role="status" aria-live="polite">' + status + '</p></article>'
+    + publicationMarkup + '<p role="status" aria-live="polite">' + status + '</p></article>' + storePolicyLinks(snapshot)
     + '<script type="application/ld+json">' + JSON.stringify(schema).replace(/</g, "\\u003c") + '</script>';
   return commercePage(product.title || "Product", main, env, new URL(request.url), product.description);
 }
 
+// Links to the shop's written policies, drawn into the page itself so they show before any script runs.
+function storePolicyLinks(snapshot) {
+  const pages = Array.isArray(snapshot?.storePolicies) ? snapshot.storePolicies : [];
+  if (!pages.length) return "";
+  return '<nav class="ww-store-policies" aria-label="Store policies">' + pages.map((page) => '<a href="' + escapeStoreHtml(page.path) + '">' + escapeStoreHtml(page.title) + '</a>').join(" ") + '</nav>';
+}
+
+// /policies/ and /policies/<name>/ are the shop's own pages. A file the site already has at that address is left alone.
+async function serveStorePolicy(request, env, url, snapshot) {
+  const pages = Array.isArray(snapshot?.storePolicies) ? snapshot.storePolicies : [];
+  if (!pages.length) return null;
+  const route = url.pathname.endsWith("/") ? url.pathname : url.pathname + "/";
+  const page = pages.find((entry) => entry.path === route);
+  if (!page && route !== "/policies/") return null;
+  const existing = await env.ASSETS.fetch(request);
+  if (existing.status < 400) return existing;
+  if (!page) {
+    const main = '<section class="ww-store-policy"><h1>Store policies</h1><ul>' + pages.map((entry) => '<li><a href="' + escapeStoreHtml(entry.path) + '">' + escapeStoreHtml(entry.title) + '</a></li>').join("") + '</ul></section>';
+    return commercePage("Store policies", main, env, url);
+  }
+  if (route !== url.pathname) return Response.redirect(new URL(route + url.search, url).toString(), 301);
+  const main = '<article class="ww-store-policy"><h1>' + escapeStoreHtml(page.title) + '</h1>' + page.html + '</article>' + storePolicyLinks(snapshot);
+  return commercePage(page.title, main, env, url);
+}
+
 async function serveCommerceCart(env, url) {
-  if (!(await readCommerceSnapshot(env))?.enabled) return new Response("Store not found", { status: 404 });
+  const snapshot = await readCommerceSnapshot(env);
+  if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
   const main = '<section class="ww-cart" data-ww-behavior="commerce-store" data-ww-cart>'
-    + '<h1>Your cart</h1><p role="status" aria-live="polite">Loading cart…</p></section>';
+    + '<h1>Your cart</h1><p role="status" aria-live="polite">Loading cart…</p></section>' + storePolicyLinks(snapshot);
   return commercePage("Your cart", main, env, url);
 }
 
@@ -845,10 +871,11 @@ function storeCardMarkup(rows, display, timeZone) {
 }
 
 async function serveCommerceCheckout(env, url) {
-  if (!(await readCommerceSnapshot(env))?.enabled) return new Response("Store not found", { status: 404 });
+  const snapshot = await readCommerceSnapshot(env);
+  if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
   if (url.searchParams.has("session_id")) return serveCommerceSuccess(env, url);
   const main = '<section class="ww-checkout" data-ww-behavior="commerce-store" data-ww-cart data-ww-checkout-page>'
-    + '<h1>Checkout</h1><p role="status" aria-live="polite">Loading checkout…</p></section>';
+    + '<h1>Checkout</h1><p role="status" aria-live="polite">Loading checkout…</p></section>' + storePolicyLinks(snapshot);
   return commercePage("Checkout", main, env, url);
 }
 
@@ -1482,7 +1509,12 @@ const siteRequestHandler = {
         || /^\/products\/[a-z0-9-]+\/$/i.test(productRoute);
       const commerceRoute = ["/shop", "/shop/", "/cart", "/cart/", "/checkout", "/checkout/",
         "/checkout/success", "/checkout/success/"].includes(url.pathname) || dynamicProductRoute;
-      const commerceSnapshot = commerceRoute ? await readCommerceSnapshot(env) : null;
+      const policyRoute = url.pathname === "/policies" || url.pathname.startsWith("/policies/");
+      const commerceSnapshot = commerceRoute || policyRoute ? await readCommerceSnapshot(env) : null;
+      if (policyRoute && commerceSnapshot?.enabled) {
+        const policyPage = await serveStorePolicy(request, env, url, commerceSnapshot);
+        if (policyPage) return policyPage;
+      }
       if (commerceSnapshot?.enabled && (commerceSnapshot.hiddenProductPaths || []).includes(productRoute)) return new Response("Product not found", { status: 404 });
       if (commerceRoute && commerceSnapshot?.enabled) {
         if (url.pathname === "/shop" || url.pathname === "/shop/") return serveCommerceShop(env, url);
