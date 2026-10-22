@@ -44,8 +44,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # On GitHub's machines unless the organisation's AWS_RUNNERS variable lists
+  # accessibility-gate; then on a one-job AWS runner that already carries the
+  # browser below. A fork's pull request never gets one.
   accessibility:
-    runs-on: ubuntu-latest
+    runs-on: ${{ contains(format(' {0} ', vars.AWS_RUNNERS), ' accessibility-gate ') && (github.event.pull_request.head.repo.full_name || github.repository) == github.repository && fromJSON('["self-hosted","jaybird-aws","jaybird-aws-medium"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -61,7 +64,7 @@ jobs:
       - name: Install accessibility engine and browser
         run: |
           npm install --no-save --no-package-lock playwright@1.55.1 axe-core@4.10.2
-          npx playwright install --with-deps chromium
+          if [ "${JAYBIRD_RUNNER_IMAGE:-}" = aws ]; then npx playwright install chromium; else npx playwright install --with-deps chromium; fi
 
       # Deterministic repairs need no model key and this job receives none. Set
       # the repository variable A11Y_REPAIR to "false" to turn the automatic

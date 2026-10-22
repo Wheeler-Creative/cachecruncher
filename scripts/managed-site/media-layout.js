@@ -205,11 +205,36 @@ export function rewriteJsonMediaValues(value, moves) {
   return { value: next, count };
 }
 
+// The host of an absolute URL ("https://h/x" or "//h/x"), or "" for anything relative.
+function absoluteHost(value) {
+  const match = /^(?:https?:)?\/\/([^/?#\s]+)/i.exec(String(value).trim());
+  return match ? match[1].replace(/^[^@]*@/, "").replace(/:\d+$/, "").toLowerCase() : "";
+}
+
+// True when `value` is an absolute URL on a host that is not the site's own. `ownHosts` lists exact hosts, and
+// suffixes written ".example.com" or "*.example.com". Without a list nothing is called foreign (callers that decide
+// what may be deleted stay generous).
+export function isForeignMediaUrl(value, ownHosts) {
+  if (!ownHosts) return false;
+  const host = absoluteHost(value);
+  if (!host) return false;
+  for (const entry of ownHosts) {
+    const own = String(entry || "").trim().toLowerCase();
+    if (!own) continue;
+    const suffix = own.startsWith("*.") ? own.slice(1) : own.startsWith(".") ? own : "";
+    if (suffix ? host.endsWith(suffix) : host === own) return false;
+  }
+  return true;
+}
+
 // Strings in a JSON document (owner content, event and product snapshots)
-// that name a stored key, with or without the /images/ route.
-export function jsonMediaReferences(value, known, into = new Set()) {
+// that name a stored key, with or without the /images/ route. A link to another
+// site's picture (a supplier's cover) is not a stored key even when its path
+// looks like one, when `ownHosts` says which hosts are the site's own.
+export function jsonMediaReferences(value, known, into = new Set(), ownHosts = null) {
   const visit = (node) => {
     if (typeof node === "string") {
+      if (isForeignMediaUrl(node, ownHosts)) return;
       const bare = node.replace(/^\/(?:images|media)\//, "");
       if (known.has(bare)) into.add(bare);
       mediaReferences(node, into);
