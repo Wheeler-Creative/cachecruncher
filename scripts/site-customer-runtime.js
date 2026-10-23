@@ -2,7 +2,9 @@
 import { composeCollectionPage } from './collection-pages-site.js';
 // 5 (2026-10-22): the website answers booking partners at its own address, /_booking-api/booking/v1 (partnerApiRoute).
 // 6 (2026-10-23): the website serves its own web app at /_app/ when it is on the Web App tier (webAppRoute).
-export const CUSTOMER_RUNTIME_VERSION = 6;
+// 7 (2026-10-23): the web app takes file uploads (a CV) and hands files back (/_app/api/upload, /_app/api/file).
+// 8 (2026-10-23): the web app shows on the website itself: app components on any page, a sign-in button, public lists.
+export const CUSTOMER_RUNTIME_VERSION = 8;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
@@ -80,8 +82,10 @@ export async function partnerApiRoute(request, env, { siteId, platformOrigin } =
 //   /_app/assets/<name>        the app's screen code, fetched from the platform by name
 //   /_app/api/<action>         the app's API, handed to the platform with this website and its address pinned
 // The browser's persona choice (demo) or sign-in (live) rides in its own headers; the platform decides what it means.
-const appAssets = new Set(['web-app-ui.js', 'web-app-ui.css', 'guest-auth.js', 'customer-login.js']);
+const appAssets = new Set(['web-app-ui.js', 'web-app-ui.css', 'web-app-embed.js', 'web-app-embed.css', 'guest-auth.js', 'customer-login.js']);
 const APP_BODY_LIMIT = 65536;
+const APP_UPLOAD_LIMIT = 10 * 1024 * 1024;
+const APP_UPLOAD_TYPES = /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain|image\/jpeg|image\/png|application\/octet-stream)(?:;|$)/i;
 export function webAppSnapshot(text, siteId) {
   try { const value = JSON.parse(text || '{}'); return value.version === 1 && value.siteId === siteId && value.enabled === true ? value : null; } catch { return null; }
 }
@@ -105,32 +109,45 @@ export async function webAppRoute(request, env, { siteId, snapshot, shell, platf
     const action = path.slice('/_app/api/'.length);
     if (!/^[a-z][a-z-]{1,30}$/.test(action)) return reply('Not found.', 404);
     if (!['GET', 'POST'].includes(request.method)) return reply('Method not allowed.', 405);
-    if (request.method === 'POST' && (request.headers.get('origin') !== url.origin || !/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || ''))) return reply('Use this website to open the app.', 403);
+    const uploading = action === 'upload';
+    if (request.method === 'POST' && (request.headers.get('origin') !== url.origin
+      || !(uploading ? APP_UPLOAD_TYPES : /^application\/json(?:;|$)/i).test(request.headers.get('content-type') || ''))) return reply('Use this website to open the app.', 403);
     if (!env.CUSTOMER_ACCOUNT_ACTOR_RATE || !env.CUSTOMER_ACCOUNT_SITE_RATE) return reply('The app is temporarily unavailable.', 503);
     const limits = await Promise.all([env.CUSTOMER_ACCOUNT_ACTOR_RATE.limit({ key: `app:${request.headers.get('cf-connecting-ip') || 'unknown'}` }), env.CUSTOMER_ACCOUNT_SITE_RATE.limit({ key: `app:${siteId}` })]);
     if (limits.some(limit => !limit.success)) return reply('Please wait a moment and try again.', 429);
     const destination = new URL('/api/web-app', platformOrigin);
-    for (const key of ['kind', 'id', 'lang', 'demo']) if (url.searchParams.has(key)) destination.searchParams.set(key, url.searchParams.get(key).slice(0, 80));
+    for (const key of ['kind', 'id', 'lang', 'demo', 'field']) if (url.searchParams.has(key)) destination.searchParams.set(key, url.searchParams.get(key).slice(0, 80));
     destination.searchParams.set('action', action); destination.searchParams.set('siteId', siteId); destination.searchParams.set('siteOrigin', url.origin);
     let body;
     if (request.method === 'POST') {
       const reader = request.body?.getReader(), chunks = []; let size = 0;
+      const limit = uploading ? APP_UPLOAD_LIMIT : APP_BODY_LIMIT;
       if (!reader) return reply('Missing request.', 400);
       try {
-        while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > APP_BODY_LIMIT) { await reader.cancel(); return reply('Request is too large.', 413); } chunks.push(value); }
+        while (true) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > limit) { await reader.cancel(); return reply(uploading ? 'The file is larger than 10 MB.' : 'Request is too large.', 413); } chunks.push(value); }
         const bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-        const parsed = JSON.parse(new TextDecoder().decode(bytes));
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return reply('Invalid request.', 400);
-        body = JSON.stringify({ ...parsed, action, siteId, siteOrigin: url.origin });
+        if (uploading) body = bytes;
+        else {
+          const parsed = JSON.parse(new TextDecoder().decode(bytes));
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return reply('Invalid request.', 400);
+          body = JSON.stringify({ ...parsed, action, siteId, siteOrigin: url.origin });
+        }
       } catch { return reply('Invalid request.', 400); }
     }
     const persona = String(request.headers.get('x-ww-app-persona') || '');
     try {
       const client = String(request.headers.get('cf-connecting-ip') || '').slice(0, 60);
-      const upstream = await fetch(destination, { method: request.method, redirect: 'manual', headers: { 'content-type': 'application/json', accept: 'application/json', origin: url.origin,
+      const fileName = String(request.headers.get('x-ww-file-name') || '').slice(0, 600);
+      const upstream = await fetch(destination, { method: request.method, redirect: 'manual', headers: { 'content-type': uploading ? request.headers.get('content-type') : 'application/json', accept: 'application/json', origin: url.origin,
         ...(client ? { 'x-ww-client-ip': client } : {}), ...(/^[0-9a-f-]{36}$/i.test(persona) ? { 'x-ww-app-persona': persona } : {}),
-        ...(request.headers.get('authorization') ? { authorization: request.headers.get('authorization') } : {}) }, ...(body ? { body } : {}), signal: AbortSignal.timeout(60000) });
+        ...(uploading && fileName ? { 'x-ww-file-name': fileName } : {}),
+        ...(request.headers.get('authorization') ? { authorization: request.headers.get('authorization') } : {}) }, ...(body ? { body } : {}), signal: AbortSignal.timeout(90000) });
       if (upstream.status >= 300 && upstream.status < 400) { await upstream.body?.cancel(); return reply('The app is temporarily unavailable.', 503); }
+      // A file comes back as itself, to be saved, never shown in the website's frame.
+      if (action === 'file' && upstream.ok) {
+        return new Response(upstream.body, { status: 200, headers: { ...privateHeaders, 'content-type': upstream.headers.get('content-type') || 'application/octet-stream',
+          'content-disposition': upstream.headers.get('content-disposition') || 'attachment' } });
+      }
       return new Response(upstream.body, { status: upstream.status, headers: { ...privateHeaders, 'content-type': 'application/json; charset=utf-8' } });
     } catch { return reply('The app is temporarily unavailable.', 503); }
   }
@@ -153,6 +170,78 @@ export async function webAppRoute(request, env, { siteId, snapshot, shell, platf
   headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://esm.sh; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
   return new Response(request.method === 'HEAD' ? null : composed.body, { headers });
 }
+// ── The web app on the website's own pages ─────────────────────────────────────────────────────────────────────────
+// Any page may hold app components, written by the owner's assistant in the website's own markup:
+//   <div data-ww-app="list" data-kind="job" data-actions="refer,apply">[<template> a card of its own </template>]</div>
+//   <a data-ww-app="signin">…</a>    <a data-ww-app-action="apply" data-kind="job" data-record="<id>">…</a>
+// /_app/assets/web-app-embed.js fills them in from the app's public lists. Besides those, the owner's choices place a
+// sign-in button in the header and lists on the pages the blueprint names (into a selector, or at the end of <main>).
+// This plans what a page gets; addWebAppEntry applies it.
+export function webAppPagePlan(snapshot, pathname) {
+  // Every page of an app's website gets the loader, so components the assistant wrote come alive with or without
+  // any placement the owner chose.
+  if (!snapshot) return null;
+  const presentation = snapshot.presentation || {};
+  const languages = Array.isArray(snapshot.languages) && snapshot.languages.length ? snapshot.languages : ['tr'];
+  const path = String(pathname || '/');
+  if (/^\/(?:[a-z]{2}\/)?_app(?:\/|$)/.test(path)) return null;
+  const lang = languages.slice(1).find((code) => path === `/${code}` || path.startsWith(`/${code}/`)) || languages[0];
+  const appPath = lang === languages[0] ? '/_app/' : `/${lang}/_app/`;
+  const header = presentation.header?.on ? { href: appPath, label: String(presentation.header.label?.[lang] || presentation.header.label?.[languages[0]] || 'App').slice(0, 40) } : null;
+  const normal = (value) => String(value || '').replace(/\/?$/, '/');
+  const lists = (presentation.lists || []).filter((item) => item.on && item.pages?.[lang] && normal(item.pages[lang]) === normal(path))
+    .map((item) => ({ kind: String(item.kind), into: item.into || null }));
+  return { lang, appPath, header, lists };
+}
+
+export function addWebAppEntry(response, snapshot, siteId, pathname) {
+  if (!snapshot || typeof HTMLRewriter === 'undefined') return response;
+  const plan = webAppPagePlan(snapshot, pathname);
+  if (!plan) return response;
+  const marker = (kind) => `<div class="ww-app-embed-list" data-ww-app="list" data-kind="${escape(kind)}"></div>`;
+  let header = 'pending', content = false, menu = false, nav = false, linked = false, itemClass = '', linkClass = '', itemSeen = false, linkSeen = false;
+  const placed = new Set();
+  const cleanClass = value => String(value || '').split(/\s+/).filter(token => /^[a-zA-Z0-9_-]+$/.test(token) && !['active', 'current', 'selected', 'is-active', 'is-current'].includes(token)).join(' ');
+  const link = () => ` <a${linkClass ? ` class="${linkClass}"` : ''} href="${escape(plan.header.href)}" data-ww-app="signin">${escape(plan.header.label)}</a>`;
+  let rewriter = new HTMLRewriter()
+    .on('head', { element(element) { element.onEndTag(end => end.before('<link rel="stylesheet" href="/_app/assets/web-app-embed.css">', { html: true })); } })
+    .on('body', { element(element) { element.append(`<script type="module" src="/_app/assets/web-app-embed.js" data-ww-app-site="${escape(siteId)}" data-ww-app-lang="${escape(plan.lang)}" data-ww-app-path="${escape(plan.appPath)}"></script>`, { html: true }); } });
+  if (plan.header) {
+    rewriter = rewriter.on('main, article', { element() { content = true; } })
+      .on('header', { element(element) {
+        if (header !== 'pending' || content) return;
+        header = 'open'; element.onEndTag(end => { if (!linked && !menu && !nav) end.before(link(), { html: true }); header = 'closed'; });
+      } })
+      .on('header nav', { element(element) {
+        if (header !== 'open' || nav) return;
+        nav = true; element.onEndTag(end => { if (!linked && !menu) end.before(link(), { html: true }); });
+      } })
+      .on('header nav ul, header ul.nav-list, header ul#primary-nav, header ul.navigation', { element(element) {
+        if (header !== 'open' || menu) return;
+        menu = true; element.onEndTag(end => { if (!linked) { linked = true; end.before(`<li${itemClass ? ` class="${itemClass}"` : ''}>${link()}</li>`, { html: true }); } });
+      } })
+      .on('header nav ul > li, header ul.nav-list > li, header ul#primary-nav > li, header ul.navigation > li', { element(element) {
+        if (header === 'open' && !itemSeen) { itemSeen = true; itemClass = cleanClass(element.getAttribute('class')); }
+      } })
+      .on('header a[href]', { element(element) {
+        if (header !== 'open') return;
+        if (element.getAttribute('data-ww-app') === 'signin' || /^\/(?:[a-z]{2}\/)?_app\/?$/.test(element.getAttribute('href') || '')) linked = true;
+      } })
+      .on('header nav a[href], header ul.nav-list a[href], header ul#primary-nav a[href]', { element(element) {
+        if (header === 'open' && !linkSeen) { linkSeen = true; linkClass = cleanClass(element.getAttribute('class')); }
+      } });
+  }
+  for (const list of plan.lists) {
+    const into = list.into || 'main';
+    rewriter = rewriter.on(into, { element(element) {
+      if (placed.has(list)) return;
+      placed.add(list);
+      element.append(marker(list.kind), { html: true });
+    } });
+  }
+  return rewriter.transform(response);
+}
+
 export function customerAccountSnapshot(text, siteId) {
   try { const value = JSON.parse(text || '{}'); return value.version === 1 && value.siteId === siteId && value.enabled === true ? value : null; } catch { return null; }
 }

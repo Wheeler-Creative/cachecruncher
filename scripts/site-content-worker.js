@@ -31,7 +31,7 @@ import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot,
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
 import { FAQ_PAGE_PATH, FAQ_RENDER_VERSION, addFaqs, parseFaqs, serveFaqPage } from "./faq-site.js";
 import { SIGNUPS_RENDER_VERSION, addSignupForm, parseSignups, signupAsset } from "./signups-site.js";
-import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot } from './site-customer-runtime.js';
+import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot, addWebAppEntry } from './site-customer-runtime.js';
 
 // Long enough that a page view does not usually pay for a bucket read, short
 // enough that an owner who saves a phone number sees it almost at once.
@@ -424,6 +424,8 @@ export function withSiteContent(handler, options = {}) {
       try {
         response = addSchedulerNav(response, scheduler);
         response = addCustomerAccountNav(response, accounts, siteId);
+        // The web app on the website's pages: its components, its sign-in button and its lists (webAppPagePlan).
+        if (siteId) response = addWebAppEntry(response, webAppSnapshot(await readWebApp(env).catch(() => null), siteId), siteId, new URL(request.url).pathname);
         response = addCollectionNav(response, collections, { pathname: new URL(request.url).pathname, languagePrefixes: options.languagePrefixes || [] });
         // Buttons a module asked for (the dated items page, the newsletter), under the owner's names for them. Not on
         // a page in another language: its menu is that language's, and these names are the main language's.
