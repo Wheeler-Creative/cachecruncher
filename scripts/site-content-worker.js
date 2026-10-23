@@ -31,7 +31,7 @@ import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot,
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
 import { FAQ_PAGE_PATH, FAQ_RENDER_VERSION, addFaqs, parseFaqs, serveFaqPage } from "./faq-site.js";
 import { SIGNUPS_RENDER_VERSION, addSignupForm, parseSignups, signupAsset } from "./signups-site.js";
-import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute } from './site-customer-runtime.js';
+import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot } from './site-customer-runtime.js';
 
 // Long enough that a page view does not usually pay for a bucket read, short
 // enough that an owner who saves a phone number sees it almost at once.
@@ -256,6 +256,7 @@ export function withSiteContent(handler, options = {}) {
   const siteId = /^site-content\/([^/]+)\.json$/.exec(options.key || "")?.[1];
   const readScheduler = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/scheduler.json` : "" });
   const readAccounts = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/customer-accounts.json` : "" });
+  const readWebApp = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/web-app.json` : "" });
   const readNewsletter = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/newsletter.json` : "" });
   const pdfMatches = new Map();
   // The blog and repeating pages: a small index read on every page (for the menu), each list's own file on its pages.
@@ -323,6 +324,12 @@ export function withSiteContent(handler, options = {}) {
       if (siteId) {
         const partner = await partnerApiRoute(request, env, { siteId, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com' });
         if (partner) return partner;
+      }
+      // The website's own web app, on the Web App tier (src/site-customer-runtime.js webAppRoute).
+      if (siteId && /^\/(?:[a-z]{2}\/)?_app(?:\/|$)/.test(new URL(request.url).pathname)) {
+        const app = await webAppRoute(request, env, { siteId, snapshot: webAppSnapshot(await readWebApp(env).catch(() => null), siteId), platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
+          shell: (path) => handler.fetch(new Request(new URL(path, request.url)), env, ctx) });
+        if (app) return app;
       }
       const accounts = siteId ? customerAccountSnapshot(await readAccounts(env).catch(() => null), siteId) : null;
       response = await customerAccountRoute(request, env, { siteId, snapshot: accounts, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
