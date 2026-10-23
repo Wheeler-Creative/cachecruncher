@@ -8708,13 +8708,60 @@ function languageForRoute(route2, variants) {
   }
   return best;
 }
+function counterpartRoute(route2, from, to, variants) {
+  const languages = variants?.languages || {};
+  if (!languages[from] || !languages[to] || from === to) return null;
+  const primary = variants.primary;
+  const path5 = (value) => {
+    const raw = String(value || "");
+    if (!raw.startsWith("/") || raw.startsWith("//")) return null;
+    return raw.split(/[?#]/)[0].replace(/\/?$/, "/");
+  };
+  const pairs = Array.isArray(variants.pairs) ? variants.pairs.filter((pair) => pair && typeof pair === "object") : [];
+  const toPrimary = (route3, language) => language === primary ? route3 : path5(Object.entries(languages[language]?.destinations || {}).find(([key, value]) => path5(value) === route3 && path5(key))?.[0]);
+  const fromPrimary = (route3, language) => language === primary ? route3 : path5(languages[language]?.destinations?.[route3] ?? languages[language]?.destinations?.[route3.replace(/\/$/, "")]);
+  const direct = (route3) => {
+    for (const pair of pairs) if (path5(pair[from]) === route3 && path5(pair[to])) return path5(pair[to]);
+    const middle = toPrimary(route3, from);
+    if (!middle) return null;
+    for (const pair of pairs) if (path5(pair[primary]) === middle && path5(pair[to])) return path5(pair[to]);
+    return fromPrimary(middle, to);
+  };
+  let current2 = path5(route2);
+  while (current2) {
+    const found = direct(current2);
+    if (found) return found;
+    if (current2 === "/") break;
+    current2 = current2.replace(/[^/]+\/$/, "");
+  }
+  return path5(languages[to].home);
+}
+function pointSwitches(html, route2, language, variants) {
+  const homes = Object.entries(variants?.languages || {}).filter(([code, variant]) => code !== language && variant?.home).map(([code, variant]) => [code, normalizeRoute(variant.home)]);
+  if (!homes.length || !String(html || "").includes("href")) return String(html || "");
+  const $2 = load(String(html || ""), {}, false);
+  let changed = false;
+  $2("a[href]").each((_, node) => {
+    const anchor = $2(node);
+    const target = homes.find(([, home]) => normalizeRoute(anchor.attr("href")) === home);
+    if (!target) return;
+    const counterpart = counterpartRoute(route2, language, target[0], variants);
+    if (counterpart && counterpart !== normalizeRoute(anchor.attr("href"))) {
+      anchor.attr("href", counterpart);
+      if (!anchor.attr("hreflang")) anchor.attr("hreflang", target[0]);
+      changed = true;
+    }
+  });
+  return changed ? $2.html() : String(html || "");
+}
 function chromeForRoute({ header = "", footer = "", languages = null } = {}, route2 = "/") {
   const language = languageForRoute(route2, languages);
-  if (!language || language === languages?.primary) return { language, header, footer };
+  if (!language) return { language, header, footer };
+  const localized = language === languages?.primary ? { header, footer } : { header: localizeChrome(header, language, languages), footer: localizeChrome(footer, language, languages) };
   return {
     language,
-    header: localizeChrome(header, language, languages),
-    footer: localizeChrome(footer, language, languages)
+    header: pointSwitches(localized.header, route2, language, languages),
+    footer: pointSwitches(localized.footer, route2, language, languages)
   };
 }
 

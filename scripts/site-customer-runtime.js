@@ -5,7 +5,9 @@ import { composeCollectionPage } from './collection-pages-site.js';
 // 7 (2026-10-23): the web app takes file uploads (a CV) and hands files back (/_app/api/upload, /_app/api/file).
 // 8 (2026-10-23): the web app shows on the website itself: app components on any page, a sign-in button, public lists.
 // 9 (2026-10-23): the app's calls carry which action a button started and which role a form is for (key, as).
-export const CUSTOMER_RUNTIME_VERSION = 9;
+// 10 (2026-10-23): pages read their snapshots together (site-content-worker), the app's files may be cached for five
+// minutes, and its list styles load only on pages that have a list, so no page waits for them.
+export const CUSTOMER_RUNTIME_VERSION = 10;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
@@ -104,7 +106,10 @@ export async function webAppRoute(request, env, { siteId, snapshot, shell, platf
     try {
       const response = await fetch(new URL(`/${name}`, platformOrigin), { redirect: 'manual', signal: AbortSignal.timeout(15000) });
       if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); return reply('The app is temporarily unavailable.', 503); }
-      return new Response(request.method === 'HEAD' ? null : response.body, { status: response.status, headers: { ...privateHeaders, 'content-type': name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' } });
+      // The app's own code, the same for everyone: a browser may keep it for five minutes, so moving between pages
+      // does not fetch it again each time.
+      return new Response(request.method === 'HEAD' ? null : response.body, { status: response.status, headers: { 'cache-control': response.ok ? 'public, max-age=300' : 'no-store',
+        'x-content-type-options': 'nosniff', 'content-type': name.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8' } });
     } catch { return reply('The app is temporarily unavailable.', 503); }
   }
   if (path.startsWith('/_app/api/')) {
@@ -208,7 +213,6 @@ export function addWebAppEntry(response, snapshot, siteId, pathname) {
   const cleanClass = value => String(value || '').split(/\s+/).filter(token => /^[a-zA-Z0-9_-]+$/.test(token) && !['active', 'current', 'selected', 'is-active', 'is-current'].includes(token)).join(' ');
   const link = () => ` <a${linkClass ? ` class="${linkClass}"` : ''} href="${escape(plan.header.href)}" data-ww-app="signin">${escape(plan.header.label)}</a>`;
   let rewriter = new HTMLRewriter()
-    .on('head', { element(element) { element.onEndTag(end => end.before('<link rel="stylesheet" href="/_app/assets/web-app-embed.css">', { html: true })); } })
     .on('body', { element(element) { element.append(`<script type="module" src="/_app/assets/web-app-embed.js" data-ww-app-site="${escape(siteId)}" data-ww-app-lang="${escape(plan.lang)}" data-ww-app-path="${escape(plan.appPath)}"></script>`, { html: true }); } });
   if (plan.header) {
     rewriter = rewriter.on('main, article', { element() { content = true; } })

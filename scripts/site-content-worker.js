@@ -320,6 +320,11 @@ export function withSiteContent(handler, options = {}) {
   };
   async function serve(request, env, ctx) {
       let response = null;
+      // A request reads up to a dozen small snapshots below, each one when its turn comes. On a quiet website, where the
+      // 20-second cache has run out, that was 1-2 seconds before the first byte of every page (Career Hunter,
+      // 2026-10-23). They are read together first, so the turns below find them cached: one read's wait, not twelve.
+      if (siteId) await Promise.all([read, readAccounts, readScheduler, readNewsletter, readWebApp, readPopups, readFaqs, readSignups, readCollections, readEvents, readImages]
+        .map((reader) => reader(env).catch(() => null)));
       // Booking channels call the property at its own address; the platform answers (src/site-customer-runtime.js).
       if (siteId) {
         const partner = await partnerApiRoute(request, env, { siteId, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com' });

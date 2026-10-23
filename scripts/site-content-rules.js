@@ -471,6 +471,9 @@ export function seoVerificationFile(seo, pathname) {
 // A small index of what each library photograph shows and its shape, kept by the
 // platform beside the owner content. It fills in what a page left out; it never
 // replaces what somebody wrote.
+// The widest copy of a library picture a page asks for (the build's SERVED_IMAGE_WIDTH in generate-site-build.mjs).
+export const SERVED_IMAGE_WIDTH = 1600;
+
 export function parseImageIndex(text) {
   let parsed = null;
   try { parsed = typeof text === "string" ? (text ? JSON.parse(text) : null) : text; } catch { return null; }
@@ -996,6 +999,15 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
         const known = name ? images[name] : null;
         if (!known) return;
         if (known.d && altNeedsDescription(element.getAttribute("alt"), name)) element.setAttribute("alt", known.d);
+        // An original far wider than any screen is served at a width a screen can use, as the build does for the
+        // pictures it copies (sizeCopiedImages). Career Hunter's blog list showed nine originals, 31 MB, for cards
+        // 370 pixels wide, and the page stalled while they were decoded. Only a bare address is changed: one that
+        // already asks for a size, or a picture with its own srcset, is left as it was.
+        const src = String(element.getAttribute("src") || "").trim();
+        if (known.w > SERVED_IMAGE_WIDTH * 1.25 && /^\/images\/[^?#]+\.(?:jpe?g|png|webp|avif)$/i.test(src)
+          && element.getAttribute("srcset") === null) {
+          element.setAttribute("src", `${src}?w=${SERVED_IMAGE_WIDTH}`);
+        }
         // aspect-ratio reserves the space without distorting a photo the stylesheet sizes by one side only.
         if (known.w && known.h && element.getAttribute("width") === null && element.getAttribute("height") === null
           && !/aspect-ratio/i.test(element.getAttribute("style") || "")) {
