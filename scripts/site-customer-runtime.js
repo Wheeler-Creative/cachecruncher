@@ -4,7 +4,8 @@ import { composeCollectionPage } from './collection-pages-site.js';
 // 6 (2026-10-23): the website serves its own web app at /_app/ when it is on the Web App tier (webAppRoute).
 // 7 (2026-10-23): the web app takes file uploads (a CV) and hands files back (/_app/api/upload, /_app/api/file).
 // 8 (2026-10-23): the web app shows on the website itself: app components on any page, a sign-in button, public lists.
-export const CUSTOMER_RUNTIME_VERSION = 8;
+// 9 (2026-10-23): the app's calls carry which action a button started and which role a form is for (key, as).
+export const CUSTOMER_RUNTIME_VERSION = 9;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
@@ -84,6 +85,7 @@ export async function partnerApiRoute(request, env, { siteId, platformOrigin } =
 // The browser's persona choice (demo) or sign-in (live) rides in its own headers; the platform decides what it means.
 const appAssets = new Set(['web-app-ui.js', 'web-app-ui.css', 'web-app-embed.js', 'web-app-embed.css', 'guest-auth.js', 'customer-login.js']);
 const APP_BODY_LIMIT = 65536;
+export const APP_QUERY_PARAMETERS = Object.freeze(['kind', 'id', 'lang', 'demo', 'field', 'key', 'as']);
 const APP_UPLOAD_LIMIT = 10 * 1024 * 1024;
 const APP_UPLOAD_TYPES = /^(application\/pdf|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|text\/plain|image\/jpeg|image\/png|application\/octet-stream)(?:;|$)/i;
 export function webAppSnapshot(text, siteId) {
@@ -116,7 +118,9 @@ export async function webAppRoute(request, env, { siteId, snapshot, shell, platf
     const limits = await Promise.all([env.CUSTOMER_ACCOUNT_ACTOR_RATE.limit({ key: `app:${request.headers.get('cf-connecting-ip') || 'unknown'}` }), env.CUSTOMER_ACCOUNT_SITE_RATE.limit({ key: `app:${siteId}` })]);
     if (limits.some(limit => !limit.success)) return reply('Please wait a moment and try again.', 429);
     const destination = new URL('/api/web-app', platformOrigin);
-    for (const key of ['kind', 'id', 'lang', 'demo', 'field']) if (url.searchParams.has(key)) destination.searchParams.set(key, url.searchParams.get(key).slice(0, 80));
+    // Only these travel. A new query parameter the app sends must be added here too: one that is not reaches the
+    // platform missing, and the call answers as if it had never been asked (runtime 8 lost key and as).
+    for (const key of APP_QUERY_PARAMETERS) if (url.searchParams.has(key)) destination.searchParams.set(key, url.searchParams.get(key).slice(0, 80));
     destination.searchParams.set('action', action); destination.searchParams.set('siteId', siteId); destination.searchParams.set('siteOrigin', url.origin);
     let body;
     if (request.method === 'POST') {
