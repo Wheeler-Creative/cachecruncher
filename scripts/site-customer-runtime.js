@@ -1,12 +1,77 @@
 // This module ships with customer Workers. Private data stays behind the platform API.
 import { composeCollectionPage } from './collection-pages-site.js';
-export const CUSTOMER_RUNTIME_VERSION = 4;
+// 5 (2026-10-22): the website answers booking partners at its own address, /_booking-api/booking/v1 (partnerApiRoute).
+export const CUSTOMER_RUNTIME_VERSION = 5;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
 // The booking page's bundle is the portal's: its modules and stylesheets are fetched from the platform origin by name.
 const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
   'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
+// ── Booking partners at the website's own address ──────────────────────────────────────────────────────────────────
+// An outside booking channel (docs/booking-partner-api.md) may call the platform's /booking/v1 or, with the same paths and
+// the same key, the property's own address: https://<website>/_booking-api/booking/v1/... . This hands the call to the
+// platform, which runs the one handler both addresses share (src/scheduler/partner-api.js), and tells it which website
+// the call arrived at in x-ww-site-id so that a key from another website is refused there (a pin can only narrow a key,
+// never widen it, so the platform needs no proof that the header came from a Worker). The method, the query, the body
+// and the Authorization header go through as they came; nothing here reads a cookie or caches an answer.
+//
+// What is answered here, in the API's own error shape and without a call to the platform: an address that is not under
+// /_booking-api/booking/v1, no key of the right shape, and a body past the API's 20 KB. Every other answer, a method the
+// API does not use included, is the platform's.
+export const PARTNER_SITE_PREFIX = '/_booking-api';
+const PARTNER_PLATFORM_PATH = '/booking/v1';
+const PARTNER_BODY_LIMIT = 20000;
+// The shape of a key (src/scheduler/partner-keys.js KEY_PATTERN); a test keeps the two equal.
+const PARTNER_KEY = /^Bearer\s+wwbk_[A-Za-z0-9_-]{43}$/i;
+const PARTNER_PASS_BACK = ['content-type', 'x-request-id', 'x-booking-api-version', 'idempotent-replayed', 'retry-after', 'allow', 'www-authenticate'];
+export async function partnerApiRoute(request, env, { siteId, platformOrigin } = {}) {
+  const url = new URL(request.url), path = url.pathname;
+  if (path !== PARTNER_SITE_PREFIX && !path.startsWith(`${PARTNER_SITE_PREFIX}/`)) return null;
+  const requestId = crypto.randomUUID();
+  const reply = (status, code, message, extra = {}) => Response.json({ error: { code, message }, request_id: requestId },
+    { status, headers: { ...privateHeaders, 'x-request-id': requestId, 'x-booking-api-version': '1', ...extra } });
+  const rest = path.slice(PARTNER_SITE_PREFIX.length);
+  if (!siteId || (rest !== PARTNER_PLATFORM_PATH && !rest.startsWith(`${PARTNER_PLATFORM_PATH}/`))) return reply(404, 'not_found', 'There is nothing at this address.');
+  if (!PARTNER_KEY.test(request.headers.get('authorization') || '')) return reply(401, 'unauthorized', 'Send your API key as "Authorization: Bearer <key>". Ask the property for a key.', { 'www-authenticate': 'Bearer' });
+  if (!origins.includes(platformOrigin)) return reply(503, 'temporarily_unavailable', 'We could not complete this. Try again in a moment.');
+  let body;
+  if (request.method === 'POST' || request.method === 'PATCH') {
+    if (Number(request.headers.get('content-length') || 0) > PARTNER_BODY_LIMIT) { await request.body?.cancel(); return reply(413, 'too_large', 'The request is over 20 KB.'); }
+    const reader = request.body?.getReader(), chunks = []; let size = 0;
+    if (reader) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          size += value.byteLength;
+          if (size > PARTNER_BODY_LIMIT) { await reader.cancel(); return reply(413, 'too_large', 'The request is over 20 KB.'); }
+          chunks.push(value);
+        }
+      } catch { return reply(400, 'invalid_request', 'The request could not be read.'); }
+      body = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+    }
+  }
+  const destination = new URL(`${PARTNER_PLATFORM_PATH}${rest.slice(PARTNER_PLATFORM_PATH.length)}`, platformOrigin);
+  if (destination.origin !== platformOrigin || (destination.pathname !== PARTNER_PLATFORM_PATH && !destination.pathname.startsWith(`${PARTNER_PLATFORM_PATH}/`))) return reply(404, 'not_found', 'There is nothing at this address.');
+  destination.search = url.search;
+  // Only these travel; anything else the caller sent, x-ww-* included, stays here. The client address is advice for the
+  // platform's budgets, as on the account routes, never a security bound.
+  const client = String(request.headers.get('cf-connecting-ip') || '').slice(0, 60);
+  const headers = { authorization: request.headers.get('authorization'), accept: request.headers.get('accept') || 'application/json', 'x-ww-site-id': siteId,
+    ...(request.headers.get('content-type') && body ? { 'content-type': request.headers.get('content-type') } : {}),
+    ...(request.headers.get('user-agent') ? { 'user-agent': String(request.headers.get('user-agent')).slice(0, 200) } : {}),
+    ...(client ? { 'x-ww-client-ip': client } : {}) };
+  try {
+    const upstream = await fetch(destination, { method: request.method, redirect: 'manual', headers, ...(body && body.byteLength ? { body } : {}), signal: AbortSignal.timeout(25000) });
+    // A redirect, or a failure that is not the API's own (an error page from in front of it), is not an answer to pass on.
+    if ((upstream.status >= 300 && upstream.status < 400) || (upstream.status >= 500 && !/json/i.test(upstream.headers.get('content-type') || ''))) {
+      await upstream.body?.cancel(); return reply(503, 'temporarily_unavailable', 'We could not complete this. Try again in a moment.');
+    }
+    const out = new Headers(privateHeaders);
+    for (const name of PARTNER_PASS_BACK) if (upstream.headers.has(name)) out.set(name, upstream.headers.get(name));
+    return new Response(upstream.body, { status: upstream.status, headers: out });
+  } catch { return reply(503, 'temporarily_unavailable', 'We could not complete this. Try again in a moment.'); }
+}
 export function customerAccountSnapshot(text, siteId) {
   try { const value = JSON.parse(text || '{}'); return value.version === 1 && value.siteId === siteId && value.enabled === true ? value : null; } catch { return null; }
 }

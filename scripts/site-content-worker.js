@@ -31,7 +31,7 @@ import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot,
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
 import { FAQ_PAGE_PATH, FAQ_RENDER_VERSION, addFaqs, parseFaqs, serveFaqPage } from "./faq-site.js";
 import { SIGNUPS_RENDER_VERSION, addSignupForm, parseSignups, signupAsset } from "./signups-site.js";
-import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot } from './site-customer-runtime.js';
+import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute } from './site-customer-runtime.js';
 
 // Long enough that a page view does not usually pay for a bucket read, short
 // enough that an owner who saves a phone number sees it almost at once.
@@ -319,6 +319,11 @@ export function withSiteContent(handler, options = {}) {
   };
   async function serve(request, env, ctx) {
       let response = null;
+      // Booking channels call the property at its own address; the platform answers (src/site-customer-runtime.js).
+      if (siteId) {
+        const partner = await partnerApiRoute(request, env, { siteId, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com' });
+        if (partner) return partner;
+      }
       const accounts = siteId ? customerAccountSnapshot(await readAccounts(env).catch(() => null), siteId) : null;
       response = await customerAccountRoute(request, env, { siteId, snapshot: accounts, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
         shell: () => handler.fetch(new Request(new URL('/', request.url)), env, ctx) });
