@@ -113,6 +113,16 @@ const RECAPTCHA_LOADER = String.raw`(function () {
     });
   }
   window.wwFormCheck = { provider: "recaptcha", kind: config.kind, load: load, token: token };
+  // Google's notice must be readable wherever the form sits, so it wears the form's own label colour rather than
+  // inheriting the section's (berkagar.com's signup card set white text on a white card, and 8px type).
+  function readableNotices() {
+    document.querySelectorAll(".ww-form-check-notice").forEach(function (notice) {
+      var form = notice.closest("form") || notice.parentElement;
+      var reference = form && form.querySelector("label, input:not([type=hidden]), textarea, button:not([type=submit])");
+      if (reference) notice.style.color = getComputedStyle(reference).color;
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", readableNotices); else readableNotices();
   function marker(form) { return form && form.querySelector ? form.querySelector("[data-ww-form-check]") : null; }
   document.addEventListener("focusin", function (event) {
     var form = event.target && event.target.closest ? event.target.closest("form") : null;
@@ -165,7 +175,7 @@ const RECAPTCHA_LOADER = String.raw`(function () {
 export function formCheckLoader(settings) {
   if (!settings || settings.incomplete) return "";
   if (settings.provider === "turnstile") return '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>';
-  return '<style>.grecaptcha-badge{visibility:hidden}.ww-form-check-notice{font-size:.8em;opacity:.8;margin:.5em 0 0}'
+  return '<style>.grecaptcha-badge{visibility:hidden}.ww-form-check-notice{font-size:max(12px,.8em);line-height:1.4;opacity:.85;margin:.5em 0 0}'
     + '.ww-form-check-notice a{color:inherit;text-decoration:underline}.ww-form-check-box{margin:.5em 0}</style>'
     + `<script data-ww-form-check-config="${attr(JSON.stringify({ key: settings.siteKey, kind: settings.kind }))}">${RECAPTCHA_LOADER}</script>`;
 }
