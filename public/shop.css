@@ -71,7 +71,7 @@ li:has(>.ww-store-toggle).is-open>.ww-store-submenu,li:has(>.ww-store-toggle)>.w
 [data-ww-store-cards="photo"] .ww-store-card{padding:0;border:0}[data-ww-store-cards="photo"] .ww-store-image-link:focus-visible{outline:3px solid currentColor;outline-offset:3px}
 .ww-store-dates{display:flex;flex-wrap:wrap;gap:0 .75rem;margin:.15rem 0 .35rem;font-size:.9rem;line-height:1.4}
 .ww-store-detail{margin:0 0 .2rem;font-size:.9rem;line-height:1.4}.ww-store-detail-name{font-weight:600}
-.ww-store-ordered{margin:.25rem 0;font-size:.9rem;font-weight:600}.ww-store-minimum{font-weight:600}
+.ww-store-ordered{margin:.25rem 0;font-size:.9rem;font-weight:600}.ww-store-minimum,.ww-store-free-shipping{font-weight:600}
 .ww-store-save{min-height:2.75rem;padding:.65rem 1rem;margin:.4rem .5rem 0 0;cursor:pointer}.ww-store-save[aria-pressed="true"]{font-weight:600}
 .ww-store-saved{margin-top:2rem}.ww-store-saved h2{font-size:1.25rem}.ww-store-saved .ww-store-title{font-size:1rem;margin:0}
 .ww-store-summary{margin:.25rem 0 .5rem;font-size:.92rem;line-height:1.45;opacity:.85;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
