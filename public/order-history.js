@@ -70,7 +70,8 @@
         const items = node("ul");
         for (const item of order.lineItems || []) {
           const line = node("li", `${item.quantity} x ${[item.title, item.variantLabel].filter(Boolean).join(" - ")} ${item.unitAmount == null ? "" : money(item.unitAmount * item.quantity, item.currency || order.currency)}`);
-          if (item.fulfilledQuantity != null) line.append(node("p", `${item.fulfilledQuantity} fulfilled, ${item.remainingQuantity} remaining${item.awaitingRelease && item.remainingQuantity ? " · Awaiting release" : ""}`));
+          const stage = item.stage === "in_progress" ? " · In the shop, being packed" : item.stage === "on_hold" ? " · Ordered from the distributor" : item.awaitingRelease && item.remainingQuantity ? " · Awaiting release" : "";
+          if (item.fulfilledQuantity != null) line.append(node("p", `${item.fulfilledQuantity} fulfilled, ${item.remainingQuantity} remaining${stage}`));
           if (item.releaseAt) line.append(node("p", "Release date: " + new Date(item.releaseAt).toLocaleDateString()));
           items.append(line);
         }

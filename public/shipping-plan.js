@@ -121,7 +121,9 @@
       const list = node("ul", "", { class: "ww-ship-list" });
       for (const order of waiting) for (const line of order.lines) {
         const item = node("li", `${line.remaining} × ${[line.title, line.variantLabel].filter(Boolean).join(" - ")}`);
-        if (line.waiting) item.append(node("small", line.releaseAt ? `Not out yet · release ${date(line.releaseAt)}` : "Not out yet"));
+        if (line.stage === "in_progress") item.append(node("small", "In the shop · goes in your next box"));
+        else if (line.stage === "on_hold") item.append(node("small", line.releaseAt ? `Ordered from the distributor · release ${date(line.releaseAt)}` : "Ordered from the distributor"));
+        else if (line.waiting) item.append(node("small", line.releaseAt ? `Not out yet · release ${date(line.releaseAt)}` : "Not out yet"));
         list.append(item);
       }
       parts.push(list);
