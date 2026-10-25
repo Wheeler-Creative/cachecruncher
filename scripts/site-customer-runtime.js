@@ -12,7 +12,7 @@ const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-ref
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
 // The booking page's bundle is the portal's: its modules and stylesheets are fetched from the platform origin by name.
-const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
+const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'vendor/supabase-js.mjs', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
   'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
 // ── Booking partners at the website's own address ──────────────────────────────────────────────────────────────────
 // An outside booking channel (docs/booking-partner-api.md) may call the platform's /booking/v1 or, with the same paths and
@@ -85,7 +85,7 @@ export async function partnerApiRoute(request, env, { siteId, platformOrigin } =
 //   /_app/assets/<name>        the app's screen code, fetched from the platform by name
 //   /_app/api/<action>         the app's API, handed to the platform with this website and its address pinned
 // The browser's persona choice (demo) or sign-in (live) rides in its own headers; the platform decides what it means.
-const appAssets = new Set(['web-app-ui.js', 'web-app-ui.css', 'web-app-embed.js', 'web-app-embed.css', 'guest-auth.js', 'customer-login.js']);
+const appAssets = new Set(['web-app-ui.js', 'web-app-ui.css', 'web-app-embed.js', 'web-app-embed.css', 'guest-auth.js', 'vendor/supabase-js.mjs', 'customer-login.js']);
 const APP_BODY_LIMIT = 65536;
 export const APP_QUERY_PARAMETERS = Object.freeze(['kind', 'id', 'lang', 'demo', 'field', 'key', 'as']);
 const APP_UPLOAD_LIMIT = 10 * 1024 * 1024;
@@ -176,7 +176,7 @@ export async function webAppRoute(request, env, { siteId, snapshot, shell, platf
   const composed = composeCollectionPage(home, { head, body }, { title, origin: url.origin, canonical: new URL(path, url.origin).href, keepMain: true });
   const headers = new Headers(composed.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
   headers.delete('content-security-policy');
-  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://esm.sh; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
   return new Response(request.method === 'HEAD' ? null : composed.body, { headers });
 }
 // ── The web app on the website's own pages ─────────────────────────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
   const headers = new Headers(page.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
   headers.delete('content-security-policy');
   // Preserve arbitrary website assets while limiting the customer component's auth connections.
-  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://esm.sh; frame-src https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.recaptcha.net https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co; frame-src https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.recaptcha.net https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
   return new Response(request.method === 'HEAD' ? null : page.body, { headers });
 }
 export function addCustomerAccountNav(response, snapshot, siteId) {

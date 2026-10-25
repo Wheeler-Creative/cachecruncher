@@ -15876,6 +15876,7 @@ init_site_blocks();
 // src/media-layout.js
 var VIDEO_TYPES = Object.freeze({ m4v: "video/mp4", mov: "video/quicktime", mp4: "video/mp4", ogv: "video/ogg", webm: "video/webm" });
 var VIDEO_EXTENSIONS = new Set(Object.keys(VIDEO_TYPES));
+var INTERNAL_MEDIA_FOLDERS = Object.freeze(["meta", "snapshots", "blueprints", "source", "pages", "sitemaps"]);
 function stableHash(value) {
   let h1 = 3735928559;
   let h2 = 1103547991;

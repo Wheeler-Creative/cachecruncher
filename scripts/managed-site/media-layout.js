@@ -21,6 +21,17 @@ export const PLAYABLE_VIDEO_TYPES = new Set(["video/mp4", "video/webm"]);
 export const FILES_FOLDER = "files/";
 export const PRODUCT_FOLDER = "products/";
 export const MEDIA_USAGE_KEY = "meta/media-usage.json";
+// Folders the platform writes beside a site's pictures (its build's records, snapshots, blueprints, raw pages): the
+// platform's, never the public's. A site Worker serves /images/<key> from the same prefix, so a request for one of
+// these is refused there (site-content-worker.js for every site, the scaffold for new ones). Found served on every
+// site on 2026-10-25: /images/meta/media-usage.json listed each site's media and where it was used.
+export const INTERNAL_MEDIA_FOLDERS = Object.freeze(["meta", "snapshots", "blueprints", "source", "pages", "sitemaps"]);
+export function isInternalMediaKey(relativeKey) {
+  const key = String(relativeKey || "").replace(/^\/+/, "");
+  if (/(?:^|\/)\.\.(?:\/|$)/.test(key)) return true;
+  const slash = key.indexOf("/");
+  return slash > 0 && INTERNAL_MEDIA_FOLDERS.includes(key.slice(0, slash).toLowerCase());
+}
 // Imported product pictures were kept beside the site's own before the product folder existed.
 const EARLIER_PRODUCT_PICTURE = /^shop-import-[0-9a-f]{16}-[0-9a-f]{16}\.(?:jpg|png|webp|gif)$/;
 

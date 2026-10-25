@@ -231,24 +231,93 @@ export function advertiseRules(response, env) {
   }
 }
 
-// SECURITY HEADERS ON EVERY PAGE THE RUNTIME SERVES. The portal sends them (src/security-headers.js); a site's Worker
-// did not, and fleet health measured eight sites without them (2026-10-17). Set only where the site has not set its
-// own (a _headers file or its own routes win), and only on HTML: a stylesheet or a photograph has nothing to protect.
+// SECURITY HEADERS ON EVERY ANSWER THE RUNTIME SERVES. The portal sends them (src/security-headers.js); a site's Worker
+// did not, and fleet health measured eight sites without them (2026-10-17); a live check on 2026-10-25 found the
+// sites still without HSTS, a permissions policy or any policy beyond framing. Set only where the site has not set its
+// own (a _headers file or its own routes win). Transport headers go on everything; the rest belongs to a page.
 // Framing is limited to the site itself and the portal, which shows the site in its preview frame.
 export const SITE_FRAME_ANCESTORS = "frame-ancestors 'self' https://jaybirddigital.com https://*.jaybirddigital.com";
-export function withSiteSecurityHeaders(response) {
-  if (!response || !/html/i.test(response.headers?.get?.("content-type") || "")) return response;
+// Six months of HTTPS for the host that answered, and no more: a customer's other subdomains (webmail, an old shop)
+// may not speak HTTPS, so includeSubDomains and preload are not this runtime's to promise.
+export const SITE_HSTS = "max-age=15552000";
+// Features no customer website asks for are off for the page and everything it frames; payment stays for the site
+// itself and Stripe's frames.
+export const SITE_PERMISSIONS_POLICY = 'camera=(), microphone=(), geolocation=(self), payment=(self "https://js.stripe.com" "https://checkout.stripe.com")';
+
+// THE POLICY A WEBSITE WOULD RUN UNDER once its pages are known to fit it: its own files and the services the platform
+// wires in (Stripe, the form check, Cloudflare's analytics), any https picture, font, style or frame, no plugins and no
+// eval. Inline styles stay allowed (every site has them); inline scripts do not, and that is what most migrated sites
+// still carry, so enforcing blind would break them. It is therefore sent as Content-Security-Policy-Report-Only on a
+// sample of page views, reporting to the platform (/api/csp-report?site=<id>), and enforced per website once its
+// reports are clean: site-integrations/<id>/security.json with { "version": 1, "siteId": "<id>", "csp": "enforce" }
+// (or "off" to send nothing). Without that file a website is in "report".
+export const POLICY_REPORT_SAMPLE = 0.1;
+export function sitePolicy({ siteId, platformOrigin = "https://jaybirddigital.com" } = {}) {
+  return [
+    "default-src 'self'",
+    "script-src 'self' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://static.cloudflareinsights.com",
+    "style-src 'self' 'unsafe-inline' https:",
+    "img-src 'self' data: blob: https:",
+    "font-src 'self' data: https:",
+    "media-src 'self' data: blob: https:",
+    `connect-src 'self' ${platformOrigin} https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://cloudflareinsights.com`,
+    "frame-src 'self' https:",
+    "object-src 'self'",
+    "base-uri 'self'",
+    `form-action 'self' ${platformOrigin} https://checkout.stripe.com`,
+    SITE_FRAME_ANCESTORS,
+    `report-uri ${platformOrigin}/api/csp-report?site=${encodeURIComponent(siteId || "")}`
+  ].join("; ");
+}
+export function securitySettings(text, siteId) {
+  try {
+    const value = JSON.parse(text || "{}");
+    if (value.version === 1 && value.siteId === siteId && ["enforce", "report", "off"].includes(value.csp)) return { csp: value.csp };
+  } catch { /* no file, or not ours: the default */ }
+  return { csp: "report" };
+}
+
+// `context`: siteId and platformOrigin for the policy, security (securitySettings) for its mode, and sample (a number
+// in [0, 1), Math.random() by default) deciding whether this page view carries the report-only policy.
+export function withSiteSecurityHeaders(response, context = {}) {
+  if (!response) return response;
+  const page = /html/i.test(response.headers?.get?.("content-type") || "");
   const csp = response.headers.get("content-security-policy") || "";
+  const mode = context.security?.csp || "report";
+  const policy = context.siteId ? sitePolicy(context) : null;
   const missing = {
+    "strict-transport-security": response.headers.has("strict-transport-security") ? null : SITE_HSTS,
     "x-content-type-options": response.headers.has("x-content-type-options") ? null : "nosniff",
-    "referrer-policy": response.headers.has("referrer-policy") ? null : "strict-origin-when-cross-origin",
-    "content-security-policy": response.headers.has("x-frame-options") || /frame-ancestors/i.test(csp) ? null
-      : (csp ? `${csp.replace(/;\s*$/, "")}; ${SITE_FRAME_ANCESTORS}` : SITE_FRAME_ANCESTORS)
+    ...(page ? {
+      "referrer-policy": response.headers.has("referrer-policy") ? null : "strict-origin-when-cross-origin",
+      "permissions-policy": response.headers.has("permissions-policy") ? null : SITE_PERMISSIONS_POLICY,
+      // A site's own policy is kept (with framing control added when it has none); ours is enforced only where the
+      // site set nothing and its file says so.
+      "content-security-policy": policy && mode === "enforce" && !csp && !response.headers.has("x-frame-options") ? policy
+        : response.headers.has("x-frame-options") || /frame-ancestors/i.test(csp) ? null
+          : (csp ? `${csp.replace(/;\s*$/, "")}; ${SITE_FRAME_ANCESTORS}` : SITE_FRAME_ANCESTORS),
+      "content-security-policy-report-only": policy && mode === "report" && !csp && !response.headers.has("content-security-policy-report-only")
+        && (context.sample ?? Math.random()) < POLICY_REPORT_SAMPLE ? policy : null
+    } : {})
   };
   if (!Object.values(missing).some(Boolean)) return response;
   const out = new Response(response.body, response);
   for (const [name, value] of Object.entries(missing)) if (value) out.headers.set(name, value);
   return out;
+}
+
+// /images/<key> is a site's picture folder; the platform's own records sit beside the pictures. The folders are
+// INTERNAL_MEDIA_FOLDERS in src/media-layout.js, written out here because this module is mounted on its own (by the
+// runtime tests and by hand-written Workers) and must not import; scripts/site-security-headers.test.mjs keeps the
+// two the same.
+export const INTERNAL_MEDIA_FOLDER = /^(?:meta|snapshots|blueprints|source|pages|sitemaps)\//i;
+export function internalMediaRequest(request) {
+  const path = new URL(request.url).pathname;
+  if (!path.startsWith("/images/")) return false;
+  try {
+    const key = decodeURIComponent(path.slice("/images/".length)).replace(/^\/+/, "");
+    return INTERNAL_MEDIA_FOLDER.test(key) || /(?:^|\/)\.\.(?:\/|$)/.test(key);
+  } catch { return true; }
 }
 
 export function withSiteContent(handler, options = {}) {
@@ -258,6 +327,7 @@ export function withSiteContent(handler, options = {}) {
   const readAccounts = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/customer-accounts.json` : "" });
   const readWebApp = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/web-app.json` : "" });
   const readNewsletter = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/newsletter.json` : "" });
+  const readSecurity = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/security.json` : "" });
   const pdfMatches = new Map();
   // The blog and repeating pages: a small index read on every page (for the menu), each list's own file on its pages.
   const readCollections = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/collections.json` : "" });
@@ -316,15 +386,21 @@ export function withSiteContent(handler, options = {}) {
     // Everything else the Worker exports - scheduled, queue, email - is kept
     // as it was. Only fetch is wrapped.
     ...handler,
-    async fetch(request, env, ctx) { return withSiteSecurityHeaders(await serve(request, env, ctx)); }
+    async fetch(request, env, ctx) {
+      const response = await serve(request, env, ctx);
+      const security = siteId ? securitySettings(await readSecurity(env).catch(() => null), siteId) : { csp: "off" };
+      return withSiteSecurityHeaders(response, { siteId, platformOrigin: env?.PORTAL_ORIGIN || "https://jaybirddigital.com", security });
+    }
   };
   async function serve(request, env, ctx) {
       let response = null;
       // A request reads up to a dozen small snapshots below, each one when its turn comes. On a quiet website, where the
       // 20-second cache has run out, that was 1-2 seconds before the first byte of every page (Career Hunter,
       // 2026-10-23). They are read together first, so the turns below find them cached: one read's wait, not twelve.
-      if (siteId) await Promise.all([read, readAccounts, readScheduler, readNewsletter, readWebApp, readPopups, readFaqs, readSignups, readCollections, readEvents, readImages]
+      if (siteId) await Promise.all([read, readAccounts, readScheduler, readNewsletter, readWebApp, readPopups, readFaqs, readSignups, readCollections, readEvents, readImages, readSecurity]
         .map((reader) => reader(env).catch(() => null)));
+      // The platform's records beside a site's pictures (meta/media-usage.json and the build's folders) are not served.
+      if (internalMediaRequest(request)) return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
       // Booking channels call the property at its own address; the platform answers (src/site-customer-runtime.js).
       if (siteId) {
         const partner = await partnerApiRoute(request, env, { siteId, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com' });

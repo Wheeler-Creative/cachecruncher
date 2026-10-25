@@ -79,7 +79,10 @@ async function serveImage(request, env, ctx, url) {
   if (cached) return cached;
 
   if (!env.MEDIA) return new Response("Not found", { status: 404 });
-  const key = MEDIA_PREFIX + decodeURIComponent(url.pathname.slice("/images/".length));
+  const relative = decodeURIComponent(url.pathname.slice("/images/".length));
+  // The platform's records sit beside the pictures (meta/, snapshots/, blueprints/, source/, pages/, sitemaps/): never served.
+  if (/^(?:meta|snapshots|blueprints|source|pages|sitemaps)\//i.test(relative) || /(?:^|\/)\.\.(?:\/|$)/.test(relative)) return new Response("Not found", { status: 404 });
+  const key = MEDIA_PREFIX + relative;
   const object = await env.MEDIA.get(key);
   // Not in media: a photo committed under public/images/ is still this site's to serve.
   if (!object) return url.pathname === new URL(request.url).pathname ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
