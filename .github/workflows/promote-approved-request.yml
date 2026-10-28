@@ -120,7 +120,15 @@ jobs:
           # token is scoped to exactly that repository and avoids requiring a
           # separately copied MANAGED_SITE_GITHUB_TOKEN secret on every site.
           GH_TOKEN: ${{ github.token }}
-        run: gh pr merge "${{ needs.find-request.outputs.request_branch }}" --squash --delete-branch
+        run: |
+          # The validation above rebuilt generated files (public/data/site.json and the like) in this checkout. When
+          # the request itself changed one of them, the branch switch gh pr merge makes after the merge refused to
+          # overwrite the local copy, and the publish stopped after the merge had already happened: merged on GitHub,
+          # never deployed, marked failed (I Took a Picture Once, 2026-10-28). Nothing local is worth keeping: the
+          # next step fetches main and rebuilds it.
+          git checkout -- .
+          git clean -fdq
+          gh pr merge "${{ needs.find-request.outputs.request_branch }}" --squash --delete-branch
       - name: Deploy merged main branch
         env:
           GH_TOKEN: ${{ github.token }}
