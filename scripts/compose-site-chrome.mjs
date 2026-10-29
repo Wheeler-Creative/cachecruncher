@@ -9030,7 +9030,13 @@ function parseContent(text) {
   }
   const seo = normalizeSeo(parsed.seo);
   const translations = normalizeTranslations(parsed.translations);
-  return { version: CONTENT_VERSION, values, ...seo ? { seo } : {}, ...translations ? { translations } : {} };
+  return {
+    version: CONTENT_VERSION,
+    values,
+    ...seo ? { seo } : {},
+    ...translations ? { translations } : {},
+    ...typeof parsed.credit === "boolean" ? { credit: parsed.credit } : {}
+  };
 }
 var TRANSLATION_LIMIT = 4e3;
 function normalizeTranslations(raw) {

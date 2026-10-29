@@ -24,7 +24,7 @@
 // throw anywhere in here all serve exactly the page in the repository. That is
 // what makes it safe to run on every request.
 
-import { CONTENT_RULES_VERSION, I18N_ATTRIBUTES, contentTransforms, imageContent, languageContent, parseContent, parseImageIndex, seoVerificationFile } from "./site-content-rules.js";
+import { CONTENT_RULES_VERSION, I18N_ATTRIBUTES, contentTransforms, creditShown, imageContent, languageContent, parseContent, parseImageIndex, seoVerificationFile } from "./site-content-rules.js";
 import { NEWSLETTER_RENDER_VERSION, newsletterPath, publishedNewsletters, replaceNewsletterPdfs, serveNewsletter } from "./newsletter-site.js";
 import { COLLECTIONS_RENDER_VERSION, addCollectionNav, addSitemapPages, collectionSitemap, fillCollectionPlaces, parseCollectionsIndex, serveCollection } from "./collection-pages-site.js";
 import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot, parseEventsSnapshot, serveDatedPage } from "./dated-page-site.js";
@@ -212,6 +212,64 @@ export function addSchedulerNav(response, snapshot) {
     } }).transform(response);
 }
 
+// THE PLATFORM'S CREDIT. "Website by Jaybird Digital", one quiet line at the end of the site's footer, drawn while the
+// page is served so an owner who hides it (`credit: false` in their content document) sees it go at once, with no build.
+// The words are the brand and nothing else; the address is the same on every site. It is a paragraph of the footer, so
+// it takes the footer's own text colour (which the site's checks already hold to AA), and its link is underlined with a
+// 44px target. It goes in the first footer outside the page's content (an article's or a quotation's footer is not the
+// site's), at the end of the page in a footer of its own when there is none, and nowhere when the footer already links to us.
+// It speaks the page's language (its <html lang>, which a Turkish-first site's Worker is not told), else the one given.
+export const CREDIT_RENDER_VERSION = 1;
+export const SITE_CREDIT_URL = "https://jaybirddigital.com/?ref=site";
+const CREDIT_WORDS = { en: "Website by Jaybird Digital", tr: "Jaybird Digital tarafından hazırlandı", de: "Website von Jaybird Digital",
+  es: "Sitio web creado por Jaybird Digital", fr: "Site réalisé par Jaybird Digital" };
+const creditLanguage = (language) => String(language || "").slice(0, 2).toLowerCase();
+export const creditWords = (language) => CREDIT_WORDS[creditLanguage(language)] || CREDIT_WORDS.en;
+const CREDIT_STYLE = "<style>.ww-credit{display:block;box-sizing:border-box;width:100%;max-width:none;grid-column:1/-1;clear:both;float:none;margin:0;"
+  + "padding:.25rem 1rem;text-align:center;font-size:clamp(.8125rem,.875em,1rem);line-height:1.5}"
+  + ".ww-credit a{display:inline-flex;align-items:center;min-height:44px;padding:0 .25rem;color:inherit;"
+  + "text-decoration:underline;text-underline-offset:.2em}</style>";
+export function renderSiteCredit(language = "en") {
+  return `${CREDIT_STYLE}<p class="ww-credit" data-ww-credit><a href="${SITE_CREDIT_URL}">${creditWords(language)}</a></p>`;
+}
+const OURS = /^https?:\/\/(?:www\.)?jaybirddigital\.com(?:[/?#]|$)/i;
+export function addSiteCredit(response, { shown = true, language = "en" } = {}) {
+  if (!shown || typeof HTMLRewriter === "undefined") return response;
+  if (!response?.ok || !String(response.headers?.get?.("content-type") || "").includes("text/html")) return response;
+  let inside = 0, footer = 0, placed = false, linked = false, spoken = language;
+  const credit = () => renderSiteCredit(spoken);
+  return new HTMLRewriter()
+    .on("html", { element(element) {
+      const lang = creditLanguage(element.getAttribute("lang"));
+      if (CREDIT_WORDS[lang]) spoken = lang;
+    } })
+    .on("main, article, section, aside, blockquote, figure, dialog, template", { element(element) {
+      if (footer) return;
+      inside += 1;
+      element.onEndTag(() => { inside -= 1; });
+    } })
+    .on("footer, [role=contentinfo]", { element(element) {
+      if (placed || inside > 0 || footer) return;
+      footer += 1;
+      element.onEndTag((end) => {
+        footer -= 1;
+        placed = true;
+        if (!linked) end.before(credit(), { html: true });
+      });
+    } })
+    .on("a[href]", { element(element) {
+      if (footer && OURS.test(String(element.getAttribute("href") || "").trim())) linked = true;
+    } })
+    .on("body", { element(element) {
+      element.onEndTag((end) => {
+        if (placed) return;
+        placed = true;
+        end.before(`<footer class="ww-credit-footer">${credit()}</footer>`, { html: true });
+      });
+    } })
+    .transform(response);
+}
+
 // Which content rules this Worker runs, for the console to read off any page (see CONTENT_RULES_VERSION).
 export function advertiseRules(response, env) {
   try {
@@ -224,6 +282,7 @@ export function advertiseRules(response, env) {
     marked.headers.set("x-ww-faq", String(FAQ_RENDER_VERSION));
     marked.headers.set("x-ww-dated", String(DATED_RENDER_VERSION));
     marked.headers.set("x-ww-signups", String(SIGNUPS_RENDER_VERSION));
+    marked.headers.set("x-ww-credit", String(CREDIT_RENDER_VERSION));
     if (env?.CUSTOMER_ACCOUNT_ACTOR_RATE && env?.CUSTOMER_ACCOUNT_SITE_RATE) marked.headers.set("x-ww-customer-accounts", String(CUSTOMER_RUNTIME_VERSION));
     return marked;
   } catch {
@@ -373,6 +432,12 @@ export function withSiteContent(handler, options = {}) {
   const readList = (env, list) => {
     if (!listReaders.has(list)) listReaders.set(list, siteContentReader({ ...options, key: `site-integrations/${siteId}/collections/${list}.json` }));
     return listReaders.get(list)(env);
+  };
+  // The owner's choice about the credit, read from the content document every page already reads.
+  let creditMemo = { text: null, shown: creditShown(null) };
+  const creditFor = (text) => {
+    if (text !== creditMemo.text) creditMemo = { text, shown: creditShown(parseContent(text)) };
+    return creditMemo.shown;
   };
   // The photograph index sits beside the content document; a site without one serves as it always did.
   const readImages = siteContentReader({ ...options, key: options.imagesKey || String(options.key || "").replace(/\.json$/, ".images.json") });
@@ -555,6 +620,12 @@ export function withSiteContent(handler, options = {}) {
       let content = await read(env);
       const pathname = new URL(request.url).pathname;
       const language = (options.languagePrefixes || []).find(code => pathname.startsWith(`/${code}/`) || pathname === `/${code}`);
+      // Not on a page the platform reads as written: what it reads there is the website's own markup.
+      if (!asWritten) {
+        try {
+          response = addSiteCredit(response, { shown: creditFor(content), language: language || options.language || "en" });
+        } catch { /* the footer as the website wrote it */ }
+      }
       if (language) {
         // Photographs are the same in every language. The owner's wording is not: a translated
         // page shows what that text was translated to, never the source-language words.

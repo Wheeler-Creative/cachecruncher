@@ -466,6 +466,17 @@ export function seoVerificationFile(seo, pathname) {
   return normalizeSeo(seo)?.googleFile?.includes(name) ? `google-site-verification: ${name}` : "";
 }
 
+// ---- The platform's credit -------------------------------------------------
+//
+// "Website by Jaybird Digital", drawn into the site's footer by its own Worker (addSiteCredit in
+// site-content-worker.js). The owner's choice is `credit` in this document, true or false, set from the editor's
+// Settings or by the assistant, live at once like any value; a document that says nothing takes the default.
+export const CREDIT_SHOWN_BY_DEFAULT = true;
+export function creditShown(content) {
+  const credit = content && typeof content === "object" ? content.credit : undefined;
+  return typeof credit === "boolean" ? credit : CREDIT_SHOWN_BY_DEFAULT;
+}
+
 // ---- Photograph descriptions -----------------------------------------------
 //
 // A small index of what each library photograph shows and its shape, kept by the
@@ -575,7 +586,8 @@ export function parseContent(text) {
   }
   const seo = normalizeSeo(parsed.seo);
   const translations = normalizeTranslations(parsed.translations);
-  return { version: CONTENT_VERSION, values, ...(seo ? { seo } : {}), ...(translations ? { translations } : {}) };
+  return { version: CONTENT_VERSION, values, ...(seo ? { seo } : {}), ...(translations ? { translations } : {}),
+    ...(typeof parsed.credit === "boolean" ? { credit: parsed.credit } : {}) };
 }
 
 // ---- Translations of the owner's text --------------------------------------
