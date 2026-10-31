@@ -29,7 +29,11 @@ const log = buildLog("a11y");
 // A11Y_SCAN_DIR is where the pages to scan are (a shared-layout site composes them into dist/).
 const publicDir = path.join(target, process.env.A11Y_SCAN_DIR || "public");
 const maxAttempts = clampInt(process.env.A11Y_MAX_ATTEMPTS, 3, 1, 6);
-const model = process.env.OPENROUTER_A11Y_MODEL || process.env.OPENROUTER_BUILD_MODEL || process.env.OPENROUTER_BUILD_FALLBACK_MODEL;
+// The repair model, its escalation, then the plain model behind the presets. One refused preset used to fail the
+// repair outright (2026-10-31); now the same request goes to the next model.
+const models = [...new Set([process.env.OPENROUTER_A11Y_MODEL || process.env.OPENROUTER_BUILD_MODEL, process.env.OPENROUTER_BUILD_FALLBACK_MODEL,
+  process.env.OPENROUTER_LAST_RESORT_MODEL].map((value) => String(value || "").trim()).filter(Boolean))];
+const model = models[0];
 const apiKey = process.env.OPENROUTER_API_KEY;
 // Escape hatch for an emergency deploy. Off by default: the whole point is that
 // an inaccessible site cannot reach a nonprofit's visitors.
@@ -59,12 +63,12 @@ async function askRepairModel({ system, user, maxTokens }) {
   // the cost of the failure it replaces. Reasoning cannot be switched off
   // outright here ("Reasoning is mandatory for this endpoint"); effort is the
   // control that works.
-  const send = (withReasoning) => fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const send = (candidate, { withReasoning, withTemperature }) => fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
-      model,
-      temperature: 0.2,
+      model: candidate,
+      ...(withTemperature ? { temperature: 0.2 } : {}),
       max_tokens: maxTokens,
       ...(withReasoning ? { reasoning: { effort: "low" } } : {}),
       messages: [
@@ -76,9 +80,21 @@ async function askRepairModel({ system, user, maxTokens }) {
 
   // Not every model accepts a reasoning parameter, and some routers reject the
   // whole request for carrying one, so a refusal retries without it rather than
-  // failing the repair.
-  let response = await send(true);
-  if (response.status === 400) response = await send(false);
+  // failing the repair. A preset that requires its parameters honoured refuses a
+  // temperature its models do not take (404, "Filter by Parameters"); that goes
+  // again without the temperature. A model still refusing hands the request to
+  // the next candidate.
+  let response = null;
+  for (const candidate of models) {
+    if (response) await response.text().catch(() => {});
+    response = await send(candidate, { withReasoning: true, withTemperature: true });
+    if (response.status === 400) response = await send(candidate, { withReasoning: false, withTemperature: true });
+    if (response.status === 404 && /Filter by Parameters|requested parameters/i.test(await response.clone().text().catch(() => ""))) {
+      response = await send(candidate, { withReasoning: true, withTemperature: false });
+    }
+    if (response.ok) break;
+    if (![400, 404, 429, 500, 502, 503, 504].includes(response.status)) break;
+  }
   if (!response.ok) throw new Error(`Repair model returned HTTP ${response.status}`);
   const payload = await response.json();
   const message = payload?.choices?.[0]?.message;
