@@ -7,13 +7,20 @@ import { composeCollectionPage } from './collection-pages-site.js';
 // 9 (2026-10-23): the app's calls carry which action a button started and which role a form is for (key, as).
 // 10 (2026-10-23): pages read their snapshots together (site-content-worker), the app's files may be cached for five
 // minutes, and its list styles load only on pages that have a list, so no page waits for them.
-export const CUSTOMER_RUNTIME_VERSION = 10;
+// 11 (2026-10-31): the booking page is part of the website's design: drawn inside its pages whenever bookings are on
+// (customer accounts or not), in its typography and its own primary button (booking-site.css, a measured probe), and the
+// pages' Book buttons and request forms are shown or hidden as bookings are on or off (bookingPlaces).
+export const CUSTOMER_RUNTIME_VERSION = 11;
+// What a website's pages say they know about bookings (x-ww-scheduler): 1 the Book now menu link and the platform's
+// booking page; 2 the booking page in the website's own look and the pages' booking places. The platform asks a
+// website below the current version to update itself the first time bookings are saved (src/worker.js ensureRuntime).
+export const SCHEDULER_RENDER_VERSION = 2;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
 // The booking page's bundle is the portal's: its modules and stylesheets are fetched from the platform origin by name.
 const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'vendor/supabase-js.mjs', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
-  'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
+  'booking-site.css', 'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
 // ── Booking partners at the website's own address ──────────────────────────────────────────────────────────────────
 // An outside booking channel (docs/booking-partner-api.md) may call the platform's /booking/v1 or, with the same paths and
 // the same key, the property's own address: https://<website>/_booking-api/booking/v1/... . This hands the call to the
@@ -253,9 +260,58 @@ export function addWebAppEntry(response, snapshot, siteId, pathname) {
 export function customerAccountSnapshot(text, siteId) {
   try { const value = JSON.parse(text || '{}'); return value.version === 1 && value.siteId === siteId && value.enabled === true ? value : null; } catch { return null; }
 }
-export async function customerAccountRoute(request, env, { siteId, snapshot, shell, platformOrigin } = {}) {
+// The website's own primary button, as its pages were written: the first link or button in the home page's content
+// whose class is "btn", "button" or "btn-primary" (a variant such as outline or secondary is passed over, and its variant
+// token dropped). The booking page carries one of them, hidden, as a probe: the booking script measures it
+// (customer-login.js applyCustomerTheme), so the booking controls take the website's button shape and lettering, not
+// only its colours. A page with no such button leaves the controls to the website's design tokens.
+export function siteButtonClass(html) {
+  const text = String(html || '');
+  const start = text.search(/<main[\s>]/i);
+  const main = start >= 0 ? text.slice(start) : text;
+  const lists = [...main.matchAll(/<(?:a|button)\b[^>]*\bclass=["']([^"']*)["']/gi)]
+    .map((match) => match[1].split(/\s+/).filter((token) => /^[a-zA-Z0-9_-]+$/.test(token)));
+  const base = (token) => /^(?:btn|button)$/i.test(token);
+  const variant = (token) => /^(?:btn|button)(?:-|--|_)(?:outline|outlined|ghost|secondary|tertiary|link|accent|alt|quiet|text|plain|small|sm|large|lg|xl|dark|light|inverse|white|block|wide|icon)$/i.test(token)
+    || /^(?:secondary|outline|outlined|ghost|quiet|alt|link|small|large)$/i.test(token);
+  const primary = lists.find((tokens) => tokens.some((token) => /^(?:btn|button)(?:-|--|_)primary$/i.test(token)));
+  const plain = lists.find((tokens) => tokens.some(base) && !tokens.some(variant));
+  const chosen = primary || plain || lists.find((tokens) => tokens.some(base));
+  return chosen ? chosen.filter((token) => !variant(token)).join(' ') : '';
+}
+// The account pages' and the booking page's CSP: the website's own assets, plus the sign-in and payment services the
+// customer controls connect to.
+const ACCOUNT_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co; frame-src https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.recaptcha.net https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+function privatePage(composed, { head = false } = {}) {
+  const headers = new Headers(composed.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
+  headers.delete('content-security-policy');
+  headers.set('content-security-policy', ACCOUNT_CSP);
+  return new Response(head ? null : composed.body, { headers });
+}
+// THE BOOKING PAGE, ON THE WEBSITE. /_booking/ is the website's own page: its header, footer and stylesheet around the
+// booking flow (public/booking.js), with the controls drawn from the website's design tokens and its measured primary
+// button (booking-site.css). It is served whenever bookings are on (the scheduler snapshot), with or without customer
+// accounts; without them the page offers no sign-in (data-ww-accounts). It is never indexed. A website whose home
+// page has no <main> to draw it into gets null here, and the platform's own booking page answers instead
+// (site-content-worker.js schedulerEntry).
+function bookingPage(home, html, { siteId, accounts, origin, path, head }) {
+  const probe = siteButtonClass(html);
+  const body = `<section class="ww-customer-account ww-booking" data-ww-customer-site="${escape(siteId)}" data-ww-account-section="booking" data-ww-accounts="${accounts ? 'on' : 'off'}">`
+    + '<div class="ww-booking-head"><h1 id="title">Book</h1><p id="intro">Loading…</p></div>'
+    + '<div id="content"></div><p id="status" role="status" aria-live="polite"></p>'
+    + '<noscript>Enable JavaScript to book online.</noscript>'
+    + (probe ? `<div hidden aria-hidden="true"><a class="${escape(probe)}" href="/_booking/" tabindex="-1" data-ww-booking-probe>Book</a></div>` : '')
+    + '</section>';
+  const headHtml = '<meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/_account/assets/customer-account.css"><link rel="stylesheet" href="/_account/assets/booking.css">'
+    + '<link rel="stylesheet" href="/_account/assets/booking-site.css"><script type="module" src="/_account/assets/booking.js"></script>';
+  return privatePage(composeCollectionPage(home, { head: headHtml, body }, { title: 'Book', origin, canonical: new URL(path, origin).href, keepMain: true }), { head });
+}
+// `snapshot` is the customer-accounts snapshot (customerAccountSnapshot), `scheduler` the bookings one
+// (site-content-worker.js schedulerSnapshot). Either lets the website serve the booking page, its assets and the
+// guest booking API; the account pages and the account API need accounts.
+export async function customerAccountRoute(request, env, { siteId, snapshot, scheduler = null, shell, platformOrigin } = {}) {
   const url = new URL(request.url), path = url.pathname;
-  if (!snapshot || !origins.includes(platformOrigin)) return null;
+  if ((!snapshot && !scheduler) || !origins.includes(platformOrigin)) return null;
   const reply = (message, status) => Response.json({ error: message }, { status, headers: privateHeaders });
   if (path.startsWith('/_account/assets/')) {
     const name = path.slice('/_account/assets/'.length);
@@ -270,6 +326,8 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
   if (path.startsWith('/_account/api/')) {
     const action = path.slice('/_account/api/'.length);
     if (!['config', 'account', 'bookings'].includes(action)) return reply('Not found.', 404);
+    // Without customer accounts the website answers only what its booking page asks for.
+    if (!snapshot && action === 'account') return reply('Not found.', 404);
     if (!['GET', 'POST'].includes(request.method) || (action === 'config' && request.method !== 'GET')) return reply('Method not allowed.', 405);
     if (request.method === 'POST' && (request.headers.get('origin') !== url.origin || !/^application\/json(?:;|$)/i.test(request.headers.get('content-type') || ''))) return reply('Use this website to access your account.', 403);
     if (!env.CUSTOMER_ACCOUNT_ACTOR_RATE || !env.CUSTOMER_ACCOUNT_SITE_RATE) return reply('Account access is temporarily unavailable.', 503);
@@ -301,7 +359,9 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
     } catch { return reply('Your account is temporarily unavailable.', 503); }
   }
   const booking = /^\/_booking\/?$/.test(path);
-  if (!booking && !/^\/_account(?:\/(?:stays|reservations|events|purchases|callback))?\/?$/.test(path) && !/^\/_guest-account\/?$/.test(path)) return null;
+  const account = /^\/_account(?:\/(?:stays|reservations|events|purchases|callback))?\/?$/.test(path) || /^\/_guest-account\/?$/.test(path);
+  if (!booking && !account) return null;
+  if (account && !snapshot) return null;
   if (!['GET', 'HEAD'].includes(request.method)) return reply('Method not allowed.', 405);
   if (/^\/_guest-account/.test(path)) return new Response(null, { status: 302, headers: { ...privateHeaders, location: '/_account/' } });
   // Existing static pages at the reserved route need an explicit integration choice.
@@ -311,20 +371,16 @@ export async function customerAccountRoute(request, env, { siteId, snapshot, she
     if (conflict) return reply('This website already has a page at this account route. Contact the business to connect its account pages.', 409);
   }
   const home = await shell();
-  if (!home.ok || !/text\/html/.test(home.headers.get('content-type') || '')) return reply('The website account page is temporarily unavailable.', 503);
+  if (!home.ok || !/text\/html/.test(home.headers.get('content-type') || '')) { await home.body?.cancel(); return booking ? null : reply('The website account page is temporarily unavailable.', 503); }
   const html = await home.clone().text();
-  if (!/<main(?:\s|>)/i.test(html)) return reply('The website needs an account layout before accounts can be displayed.', 409);
+  if (!/<main(?:\s|>)/i.test(html)) return booking ? null : reply('The website needs an account layout before accounts can be displayed.', 409);
+  if (booking) return bookingPage(home, html, { siteId, accounts: Boolean(snapshot), origin: url.origin, path, head: request.method === 'HEAD' });
   const section = path.split('/')[2] || 'summary';
-  const body = `<section class="ww-customer-account" data-ww-customer-site="${escape(siteId)}" data-ww-account-section="${escape(section)}"><nav aria-label="Customer account"><a href="/">Website</a> <a href="/_account/">My account</a> <a id="website-link" href="/" hidden>Visit website</a></nav><h1 id="title">${booking ? 'Reservations' : 'My account'}</h1><p id="intro">Loading…</p><div id="content"></div><p id="status" role="status" aria-live="polite"></p><noscript>Enable JavaScript to sign in and manage your account.</noscript></section>`;
-  // The booking page wears the same stylesheets mounted and standalone (scheduler.css, booking.css) over the site's own
-  // customer-account theme; portal.css stays on the portal, since its :root tokens would restyle the website around it.
-  const head = `<meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/_account/assets/customer-account.css">${booking ? '<link rel="stylesheet" href="/_account/assets/scheduler.css"><link rel="stylesheet" href="/_account/assets/booking.css">' : ''}<script type="module" src="/_account/assets/${booking ? 'booking.js' : 'customer-account.js'}"></script>`;
-  const page = composeCollectionPage(home, { head, body }, { title: booking ? 'Reservations' : 'My account', origin: url.origin, canonical: new URL(path, url.origin).href, keepMain: true });
-  const headers = new Headers(page.headers); for (const [key, value] of Object.entries(privateHeaders)) headers.set(key, value);
-  headers.delete('content-security-policy');
-  // Preserve arbitrary website assets while limiting the customer component's auth connections.
-  headers.set('content-security-policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co; frame-src https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.recaptcha.net https://*.stripe.com; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
-  return new Response(request.method === 'HEAD' ? null : page.body, { headers });
+  const body = `<section class="ww-customer-account" data-ww-customer-site="${escape(siteId)}" data-ww-account-section="${escape(section)}"><nav aria-label="Customer account"><a href="/">Website</a> <a href="/_account/">My account</a> <a id="website-link" href="/" hidden>Visit website</a></nav><h1 id="title">My account</h1><p id="intro">Loading…</p><div id="content"></div><p id="status" role="status" aria-live="polite"></p><noscript>Enable JavaScript to sign in and manage your account.</noscript></section>`;
+  // The account pages wear the site's own customer-account theme; portal.css stays on the portal, since its :root tokens
+  // would restyle the website around them.
+  const head = '<meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/_account/assets/customer-account.css"><script type="module" src="/_account/assets/customer-account.js"></script>';
+  return privatePage(composeCollectionPage(home, { head, body }, { title: 'My account', origin: url.origin, canonical: new URL(path, url.origin).href, keepMain: true }), { head: request.method === 'HEAD' });
 }
 export function addCustomerAccountNav(response, snapshot, siteId) {
   if (!snapshot || typeof HTMLRewriter === 'undefined') return response;

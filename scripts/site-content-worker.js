@@ -31,7 +31,7 @@ import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot,
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
 import { FAQ_PAGE_PATH, FAQ_RENDER_VERSION, addFaqs, parseFaqs, serveFaqPage } from "./faq-site.js";
 import { SIGNUPS_RENDER_VERSION, addSignupForm, parseSignups, signupAsset } from "./signups-site.js";
-import { CUSTOMER_RUNTIME_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot, addWebAppEntry } from './site-customer-runtime.js';
+import { CUSTOMER_RUNTIME_VERSION, SCHEDULER_RENDER_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot, addWebAppEntry } from './site-customer-runtime.js';
 
 // Long enough that a page view does not usually pay for a bucket read, short
 // enough that an owner who saves a phone number sees it almost at once.
@@ -179,14 +179,39 @@ export function schedulerSnapshot(text, siteId, portalOrigin = "https://jaybirdd
     return { bookingUrl: url.href };
   } catch { return null; }
 }
+// The platform's own booking page, for a website that cannot draw the booking page into its own pages (no <main> on
+// its home page). A website that can draws it at /_booking/ itself (site-customer-runtime.js customerAccountRoute).
 export function schedulerEntry(request, snapshot) {
   if (!snapshot || !["GET", "HEAD"].includes(request.method)
     || !["/_booking", "/_booking/", "/_guest-account", "/_guest-account/"].includes(new URL(request.url).pathname)) return null;
   return new Response(null, { status: 302, headers: { location: snapshot.bookingUrl, "cache-control": "no-store" } });
 }
+// THE PAGES' OWN BOOK BUTTONS. A page written for a website whose plan includes bookings carries its call to action as a
+// link to /_booking/ marked data-ww-booking-link and, when nothing could be booked yet as it was written, a request form
+// marked data-ww-booking-request beside it with the link hidden (scripts/generate-site-build.mjs bookingsContext). Which
+// of the two a visitor sees is decided here, as the page is served, from the bookings snapshot: bookings on shows every
+// Book link and hides every request form; bookings off hides the links (never a dead link) and shows the forms. So the
+// owner's setting bookings up changes the pages at once, with nothing rebuilt. A link to any other address is left as
+// written. The one rule in the head is what makes hidden mean hidden on a button whose own class sets its display.
+export const BOOKING_PLACES_STYLE = "<style>[data-ww-booking-link][hidden],[data-ww-booking-request][hidden]{display:none!important}</style>";
+export function applyBookingPlaces(response, snapshot) {
+  if (typeof HTMLRewriter === "undefined") return response;
+  const live = Boolean(snapshot);
+  return new HTMLRewriter()
+    .on("head", { element(element) { element.append(BOOKING_PLACES_STYLE, { html: true }); } })
+    .on("a[data-ww-booking-link]", { element(element) {
+      if (!/^\/_booking\/?(?:[?#]|$)/.test(String(element.getAttribute("href") || ""))) return;
+      if (live) element.removeAttribute("hidden"); else element.setAttribute("hidden", "");
+    } })
+    .on("[data-ww-booking-request]", { element(element) {
+      if (live) element.setAttribute("hidden", ""); else element.removeAttribute("hidden");
+    } }).transform(response);
+}
+// The Book now link takes the class of the menu's own links (never the brand link's, which came first in the header
+// and dressed Book now as a second brand on Heal, 2026-10-31), so it reads as one more menu item.
 export function addSchedulerNav(response, snapshot) {
   if (!snapshot || typeof HTMLRewriter === "undefined") return response;
-  let header = "pending", content = false, menu = false, linked = false, itemClass = "", linkClass = "";
+  let header = "pending", content = false, menu = false, linked = false, itemClass = "", linkClass = "", linkSeen = false;
   const cleanClass = value => String(value || "").split(/\s+/).filter(token => /^[a-zA-Z0-9_-]+$/.test(token)
     && !["active", "current", "selected", "is-active", "is-current"].includes(token)).join(" ");
   const link = () => `<a${linkClass ? ` class="${linkClass}"` : ""} href="/_booking/" data-ww-booking-link>Book now</a>`;
@@ -208,7 +233,9 @@ export function addSchedulerNav(response, snapshot) {
       if (header !== "open") return;
       const href = String(element.getAttribute("href") || "");
       if (/^\/_booking\/?$/.test(href) || href === snapshot.bookingUrl) linked = true;
-      if (!linkClass) linkClass = cleanClass(element.getAttribute("class"));
+    } })
+    .on("header nav a[href], header ul.nav-list a[href], header ul#primary-nav a[href]", { element(element) {
+      if (header === "open" && !linkSeen) { linkSeen = true; linkClass = cleanClass(element.getAttribute("class")); }
     } }).transform(response);
 }
 
@@ -277,7 +304,7 @@ export function advertiseRules(response, env) {
     marked.headers.set("x-ww-content", String(CONTENT_RULES_VERSION));
     marked.headers.set("x-ww-newsletter", String(NEWSLETTER_RENDER_VERSION));
     marked.headers.set("x-ww-collections", String(COLLECTIONS_RENDER_VERSION));
-    marked.headers.set("x-ww-scheduler", "1");
+    marked.headers.set("x-ww-scheduler", String(SCHEDULER_RENDER_VERSION));
     marked.headers.set("x-ww-popups", String(POPUPS_RENDER_VERSION));
     marked.headers.set("x-ww-faq", String(FAQ_RENDER_VERSION));
     marked.headers.set("x-ww-dated", String(DATED_RENDER_VERSION));
@@ -478,10 +505,11 @@ export function withSiteContent(handler, options = {}) {
         if (app) return app;
       }
       const accounts = siteId ? customerAccountSnapshot(await readAccounts(env).catch(() => null), siteId) : null;
-      response = await customerAccountRoute(request, env, { siteId, snapshot: accounts, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
+      const scheduler = siteId ? schedulerSnapshot(await readScheduler(env).catch(() => null), siteId, env.PORTAL_ORIGIN || "https://jaybirddigital.com") : null;
+      // The account pages, and the booking page in the website's own look (with or without customer accounts).
+      response = await customerAccountRoute(request, env, { siteId, snapshot: accounts, scheduler, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com',
         shell: () => handler.fetch(new Request(new URL('/', request.url)), env, ctx) });
       if (response && !resolvable(response)) return response;
-      const scheduler = siteId ? schedulerSnapshot(await readScheduler(env).catch(() => null), siteId, env.PORTAL_ORIGIN || "https://jaybirddigital.com") : null;
       const booking = !response && schedulerEntry(request, scheduler);
       if (booking) return booking;
       if (siteId && new URL(request.url).pathname.startsWith("/_ww/popups.")) {
@@ -568,6 +596,8 @@ export function withSiteContent(handler, options = {}) {
       }
       if (!resolvable(response)) return response;
       try {
+        // The pages' own Book buttons and request forms, as bookings are on or off right now.
+        if (siteId && !asWritten) response = applyBookingPlaces(response, scheduler);
         response = addSchedulerNav(response, scheduler);
         response = addCustomerAccountNav(response, accounts, siteId);
         // The web app on the website's pages: its components, its sign-in button and its lists (webAppPagePlan).
