@@ -705,6 +705,7 @@ async function commercePage(title, main, env, url, description = "") {
     if (homepage.ok && String(homepage.headers.get("content-type") || "").includes("text/html")) {
       if (typeof HTMLRewriter === "undefined") {
         const html = (await homepage.text())
+          .replace(/\s+aria-current="page"/g, "")
           .replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, "<title>" + escapeStoreHtml(title + " | " + STORE_SITE_NAME) + "</title>")
           .replace(/<main\b([^>]*)>[\s\S]*?<\/main>/i, (_, attributes) => "<main" + attributes + ">" + main + "</main>");
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "Link": "<" + url.origin + url.pathname + ">; rel=canonical" } });
@@ -712,6 +713,8 @@ async function commercePage(title, main, env, url, description = "") {
       // Store pages are run by the shared behaviour runtime, whether or not the site's other pages load it.
       let sharedRuntime = false;
       const composed = new HTMLRewriter()
+        // The shell is the home page's, and this is not the home page.
+        .on('[aria-current="page"]', { element(element) { element.removeAttribute("aria-current"); } })
         .on("title", { element(element) { element.setInnerContent(String(title) + " | " + STORE_SITE_NAME); } })
         .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", url.origin + url.pathname); } })
         .on('meta[name="description"]', { element(element) { element.setAttribute("content", String(description || title).slice(0, 300)); } })
@@ -720,7 +723,10 @@ async function commercePage(title, main, env, url, description = "") {
         .on("body", { element(element) { element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); }); } })
         .transform(homepage);
       const commerceNavigation = await addCommerceNavigation(composed, env);
-      const navigated = typeof addOrderHistoryNavigation === "function" ? await addOrderHistoryNavigation(commerceNavigation, env) : commerceNavigation;
+      const ordered = typeof addOrderHistoryNavigation === "function" ? await addOrderHistoryNavigation(commerceNavigation, env) : commerceNavigation;
+      // After the store's own links are added: the page's own menu link is marked as the current one.
+      const navigated = /^[\w/.-]+$/.test(url.pathname)
+        ? new HTMLRewriter().on('a[href="' + url.pathname + '"]', { element(element) { element.setAttribute("aria-current", "page"); } }).transform(ordered) : ordered;
       const response = new Response(navigated.body, navigated);
       response.headers.set("cache-control", "no-store");
       response.headers.append("Link", "<" + url.origin + url.pathname + ">; rel=canonical");
@@ -866,6 +872,11 @@ async function serveCommerceShop(env, url) {
   return commercePage(settings.label, main, env, url);
 }
 
+// A product with no picture yet: its initial on a quiet panel, so the card still looks finished.
+function storeBlankPicture(product) {
+  return '<div class="ww-store-image-placeholder" aria-hidden="true">' + escapeStoreHtml(Array.from(String(product.title || "").trim())[0] || "") + '</div>';
+}
+
 // Prices are stored in minor units; the currency says how many digits that is.
 function storeMoneyText(amount, currency) {
   if (amount === null || amount === undefined || !currency) return "";
@@ -902,7 +913,7 @@ function storeCardMarkup(rows, display, timeZone) {
   const buyable = rows.some((row) => row.active && row.purchasable);
   if (cards === "photo") return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" aria-label="' + title + '" title="' + title + '">'
-    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="" loading="lazy">' : '<div class="ww-store-image-placeholder">Photo coming soon</div>')
+    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="" loading="lazy">' : storeBlankPicture(product))
     + '</a><h2 class="ww-store-title ww-store-visually-hidden">' + title + '</h2></article>';
   const owned = Boolean(cards);
   const dates = parts.includes("dates") ? productOrderDates(product.catalog, timeZone, "en-US") : {};
@@ -916,7 +927,7 @@ function storeCardMarkup(rows, display, timeZone) {
   }).join('');
   return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" tabindex="-1" aria-hidden="true">'
-    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + title + '" loading="lazy">' : '<div class="ww-store-image-placeholder">Photo coming soon</div>')
+    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + title + '" loading="lazy">' : storeBlankPicture(product))
     + '</a><h2 class="ww-store-title"><a href="' + href + '">' + title + '</a></h2>' + dateLine + detailLines + (!cards || parts.includes("price") ? storePriceMarkup(rows) : '')
     + (parts.includes("summary") && product.summary ? '<p class="ww-store-summary">' + escapeStoreHtml(product.summary) + '</p>' : '')
     + (buyable ? (owned ? '' : '<a class="ww-store-link" href="' + href + '">View details</a>') : '<p class="ww-store-status">' + (closed && parts.includes("dates") ? 'Pre-orders closed.' : 'Coming soon') + '</p>')

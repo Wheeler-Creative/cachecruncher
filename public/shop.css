@@ -1,7 +1,7 @@
 
 .ww-commerce-main{max-width:1100px!important;margin:0 auto!important;padding:2rem 1.5rem 3rem!important}.ww-commerce-main h1{font-size:clamp(2rem,5vw,3.5rem);line-height:1.15;overflow-wrap:anywhere}
 
-.ww-store-image-placeholder{display:grid;place-items:center;aspect-ratio:4/3;width:100%;background:var(--surface,#f0f3f5);border:1px solid var(--line,#d7dfe5);border-radius:8px;color:var(--muted,#586875);font-size:.9rem}
+.ww-store-image-placeholder{display:grid;place-items:center;aspect-ratio:4/3;width:100%;background:var(--surface,#f0f3f5);border:1px solid var(--line,#d7dfe5);border-radius:8px;color:var(--muted,#586875);font-family:var(--font-heading,inherit);font-size:clamp(2.5rem,6vw,4rem);line-height:1}
 
 .ww-store-publication{display:grid;grid-template-columns:minmax(7rem,auto) minmax(0,1fr);gap:.5rem 1.5rem;margin-block:1.5rem}.ww-store-publication dt{font-weight:600}.ww-store-publication dd{margin:0;overflow-wrap:anywhere}@media(max-width:480px){.ww-store-publication{grid-template-columns:1fr;gap:.2rem}.ww-store-publication dd{margin-bottom:.6rem}}
 
@@ -28,6 +28,7 @@
 [data-ww-product-columns] .ww-store-grid:not(.is-row){grid-template-columns:repeat(var(--ww-store-columns),minmax(0,1fr))}@media(max-width:900px){[data-ww-product-columns] .ww-store-grid:not(.is-row){grid-template-columns:repeat(var(--ww-store-columns-md),minmax(0,1fr))}}@media(max-width:560px){[data-ww-product-columns] .ww-store-grid:not(.is-row){grid-template-columns:repeat(2,minmax(0,1fr))}}
 [data-ww-product-image-ratio] .ww-store-card .ww-store-image,[data-ww-product-image-ratio] .ww-store-card .ww-store-image-placeholder{aspect-ratio:var(--ww-store-ratio);object-fit:var(--ww-store-fit,contain)}
 .ww-store-grid.is-row{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(min(70%,220px),1fr);grid-template-columns:none;overflow-x:auto;scroll-snap-type:x proximity;padding-bottom:.5rem}.ww-store-grid.is-row>.ww-store-card{scroll-snap-align:start}
+[data-ww-behavior~="commerce-store"][data-ww-product-list]{display:block!important}
 .ww-store-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:1.25rem;margin-block:1.5rem}
 .ww-store-card,.ww-cart-line{border:1px solid var(--line,currentColor);padding:1rem;min-width:0}
 .ww-store-image{display:block;width:100%;aspect-ratio:4/3;object-fit:var(--ww-store-fit,contain);background:var(--surface,#f3f3f3)}
