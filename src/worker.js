@@ -44,6 +44,17 @@ const CONTACT_RATE_SALT = "3ede3976d99d2c3df76ceecec0b06ffa78073b193cb19f77bcd6d
 // a URL without redirecting the old one is a 404 with better spelling.
 const REDIRECTS = {};
 const MAX_WIDTH = 2000;
+// The width of a picture whose address does not say.
+const SCREEN_WIDTH = 1600;
+// The most a phone is sent. Its screen is about this many pixels across, so anything wider is weight it throws away.
+// The exception is a picture the visitor opened large (MAX_WIDTH, a gallery's lightbox), which they can zoom into.
+const PHONE_WIDTH = 1080;
+// Left to itself the resizer is close to lossless: a 960 KB photograph resized to 1600 wide came out at 2 MB. At 80 it
+// is 270 KB and looks the same beside the original. A picture that can afford less asks with ?q=.
+const IMAGE_QUALITY = 80;
+// Up to this weight a bare address serves the stored bytes. They are already light enough, and it spends no resize.
+const LIGHT_IMAGE_BYTES = 150 * 1024;
+const RESIZABLE_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif"]);
 // Bump to abandon everything cached under the old behaviour.
 //
 // Responses here are cached "immutable" for a year, so a fix to how an image
@@ -51,7 +62,7 @@ const MAX_WIDTH = 2000;
 // was being re-encoded to 3.4MB kept being served at 3.4MB from whichever edge
 // had it. The version is part of the cache key, not the URL the page asks for,
 // so nothing in the site's markup has to change.
-const CACHE_VERSION = "2";
+const CACHE_VERSION = "4";
 const FORMATS = { webp: "image/webp", avif: "image/avif", jpeg: "image/jpeg", png: "image/png" };
 
 // The managed forms' bot check (scripts/form-check-rewriter.js): reCAPTCHA, Turnstile or none, read from secrets.
@@ -66,15 +77,33 @@ function signupFormCheck(env, language) {
   return settings && !settings.incomplete ? formCheckFields(settings, "subscribe", language) + formCheckLoader(settings) : "";
 }
 
-function imageCacheKey(request, url) {
+// What the address does not say and the answer depends on. An iPad's screen is not a phone's, though an older one says
+// Mobile. WebP is sent only to a reader that asks for it: a crawler or a mail proxy gets the stored picture as it was.
+function imageVariant(request) {
+  const agent = request.headers.get("user-agent") || "";
+  return {
+    phone: /Mobi/i.test(agent) && !/iPad/i.test(agent),
+    webp: (request.headers.get("accept") || "").includes("image/webp")
+  };
+}
+
+// Not a vector, an animation, or a video left beside the images, and heavy enough to be worth the resize.
+function worthResizing(object, key) {
+  const type = (object.httpMetadata && object.httpMetadata.contentType || "").toLowerCase();
+  return object.size > LIGHT_IMAGE_BYTES && (RESIZABLE_TYPES.has(type) || /\.(?:jpe?g|png|webp|avif)$/i.test(key));
+}
+
+function imageCacheKey(request, url, variant) {
   const key = new URL(url.toString());
   key.searchParams.set("__v", CACHE_VERSION);
+  key.searchParams.set("__d", (variant.phone ? "phone" : "wide") + (variant.webp ? "-webp" : ""));
   return new Request(key.toString(), { method: "GET", headers: request.headers });
 }
 
 async function serveImage(request, env, ctx, url) {
+  const variant = imageVariant(request);
   const cache = caches.default;
-  const cacheKey = imageCacheKey(request, url);
+  const cacheKey = imageCacheKey(request, url, variant);
   const cached = await cache.match(cacheKey);
   if (cached) return cached;
 
@@ -87,19 +116,23 @@ async function serveImage(request, env, ctx, url) {
   // Not in media: a photo committed under public/images/ is still this site's to serve.
   if (!object) return url.pathname === new URL(request.url).pathname ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });
 
-  const width = Math.min(Math.max(parseInt(url.searchParams.get("w") || "0", 10) || 0, 0), MAX_WIDTH);
-  // Asked for by a picture that can afford it, such as a page backdrop. Out of range is the resizer's own default.
+  const askedWidth = Math.max(parseInt(url.searchParams.get("w") || "0", 10) || 0, 0);
+  // Asked for by a picture that can afford it, such as a page backdrop. Out of range is the ordinary quality.
   const asked = parseInt(url.searchParams.get("q") || "0", 10) || 0;
-  const quality = asked >= 40 && asked <= 90 ? asked : 0;
+  const quality = asked >= 40 && asked <= 90 ? asked : IMAGE_QUALITY;
   const requestedFormat = (url.searchParams.get("format") || "").toLowerCase();
   const format = FORMATS[requestedFormat] || "image/webp";
+  // No size or format in the address. Pictures reach a site by several doors and only one of them makes them web-ready,
+  // and a stylesheet, a store card or a popup can name one directly, so this is the one place all of them pass through.
+  const bare = !askedWidth && !requestedFormat;
+  const width = askedWidth >= MAX_WIDTH ? MAX_WIDTH
+    : Math.min(askedWidth || (bare ? SCREEN_WIDTH : 0), variant.phone ? PHONE_WIDTH : MAX_WIDTH);
 
   let response;
   try {
-    // Uploads are already normalized for the web. The ordinary /images/name
-    // path serves those bytes directly; Images runs only for an explicit size
-    // or format variant, avoiding a transformation and decode on every photo.
-    if (!width && !requestedFormat) {
+    // A light picture is served as it is stored, so Images runs only where it
+    // saves something, avoiding a transformation and decode on every photo.
+    if (bare && !(variant.webp && worthResizing(object, key))) {
       const headers = new Headers({ "cache-control": "public, max-age=31536000, immutable" });
       object.writeHttpMetadata(headers);
       headers.set("etag", object.httpEtag);
@@ -107,9 +140,15 @@ async function serveImage(request, env, ctx, url) {
     } else {
       if (!env.IMAGES) throw new Error("no images binding");
       let pipeline = env.IMAGES.input(object.body);
-      if (width) pipeline = pipeline.transform({ width });
-      const result = await pipeline.output(quality ? { format, quality } : { format });
-      response = result.response();
+      // scale-down: a picture narrower than the screen is never blown up to fit the number.
+      if (width) pipeline = pipeline.transform({ width, fit: "scale-down" });
+      const result = await pipeline.output(format === "image/png" ? { format } : { format, quality });
+      const resized = result.response();
+      const bytes = await resized.arrayBuffer();
+      // A picture already squeezed harder than this comes out heavier than it went in (175 KB became 300). Sizing it
+      // must never cost weight, so the stored one is the answer, unless the address asked for a format it is not in.
+      if (!requestedFormat && bytes.byteLength >= object.size) throw new Error("the stored picture is lighter");
+      response = new Response(bytes, { headers: resized.headers });
       response.headers.set("cache-control", "public, max-age=31536000, immutable");
     }
   } catch {
@@ -125,6 +164,7 @@ async function serveImage(request, env, ctx, url) {
     response = new Response(original.body, { headers });
   }
 
+  response.headers.set("vary", "Accept, User-Agent");
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
 }

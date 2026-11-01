@@ -45,6 +45,7 @@
 //   tagName            lowercase name
 //   getAttribute(n)    string | null
 //   setAttribute(n,v)
+//   removeAttribute(n)
 //   setInnerContent(t) replace children with text
 //   replace(html)      replace the element itself with markup
 //
@@ -484,6 +485,8 @@ export function creditShown(content) {
 // replaces what somebody wrote.
 // The widest copy of a library picture a page asks for (the build's SERVED_IMAGE_WIDTH in generate-site-build.mjs).
 export const SERVED_IMAGE_WIDTH = 1600;
+// Narrower than this a library picture is a logo or an icon, not what the page opens with.
+const MAIN_PICTURE_WIDTH = 600;
 
 export function parseImageIndex(text) {
   let parsed = null;
@@ -1004,6 +1007,7 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
   // After the owner's own photographs are resolved, so a swapped photo is
   // described by the file it now shows.
   if (images) {
+    let mainPicture = false;
     transforms.push({
       selector: "img[src]",
       apply(element) {
@@ -1019,6 +1023,13 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
         if (known.w > SERVED_IMAGE_WIDTH * 1.25 && /^\/images\/[^?#]+\.(?:jpe?g|png|webp|avif)$/i.test(src)
           && element.getAttribute("srcset") === null) {
           element.setAttribute("src", `${src}?w=${SERVED_IMAGE_WIDTH}`);
+        }
+        // The first large picture is what a visitor is waiting to see. A copied page marks every picture lazy, which
+        // holds this one back until the page has laid out, so it is fetched first instead. Transforms are per response.
+        if (!mainPicture && known.w >= MAIN_PICTURE_WIDTH) {
+          mainPicture = true;
+          if (element.getAttribute("loading") === "lazy") element.removeAttribute("loading");
+          if (element.getAttribute("fetchpriority") === null) element.setAttribute("fetchpriority", "high");
         }
         // aspect-ratio reserves the space without distorting a photo the stylesheet sizes by one side only.
         if (known.w && known.h && element.getAttribute("width") === null && element.getAttribute("height") === null
