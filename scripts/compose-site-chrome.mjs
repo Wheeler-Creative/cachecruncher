@@ -16812,7 +16812,7 @@ async function adoptSharedLayout(site) {
     const first = full.find((entry) => entry.file === "index.html") || full[0];
     const common2 = first.parts.head.filter((node) => !/^<title\b|^<meta\b[^>]*name=["']description["']|^<link\b[^>]*rel=["']canonical["']|^<script\b[^>]*application\/ld\+json/i.test(node) && full.every((entry) => entry.parts.head.includes(node)));
     await mkdir(path3.join(site, "layout"), { recursive: true });
-    for (const [file, value] of [["layout/site.html", SITE_LAYOUT_TEMPLATE], ["layout/head.html", common2.join("\n")], ["layout/header.html", first.parts.header], ["layout/footer.html", first.parts.footer], ["layout/scripts.html", first.parts.scripts]]) if (await optional(site, file) === null) await writeFile(path3.join(site, file), value);
+    for (const [file, value] of [["layout/site.html", SITE_LAYOUT_TEMPLATE], ["layout/head.html", common2.join("\n")], ["layout/header.html", first.parts.header], ["layout/footer.html", first.parts.footer], ["layout/scripts.html", (full.find((entry) => String(entry.parts.scripts || "").trim()) || first).parts.scripts]]) if (await optional(site, file) === null) await writeFile(path3.join(site, file), value);
     manifest = { version: 2, defaults: { htmlAttributes: first.parts.htmlAttributes, bodyAttributes: first.parts.bodyAttributes }, headNodes: {}, pages: {} };
   }
   if (manifest.version !== 2) throw Error("Unsupported shared layout source version");
@@ -16913,7 +16913,10 @@ async function readSharedSources(site, pending = null) {
     takeOptional("layout/languages.json")
   ]);
   validateDocumentLayout(template);
-  return { manifest: JSON.parse(metadata), template, head, header, footer, scripts, languages: parseLanguages(languages) };
+  const behaviour = await takeOptional("public/app.js");
+  const platformBehaviour = behaviour !== null && /Jaybird Digital shared behaviour/.test(behaviour.slice(0, 200));
+  const shared = platformBehaviour && !/<script\b[^>]*src=["']\/app\.js["']/i.test(scripts || "") ? ((scripts || "").trim() + '\n<script src="/app.js" defer></script>').trim() : scripts;
+  return { manifest: JSON.parse(metadata), template, head, header, footer, scripts: shared, languages: parseLanguages(languages) };
 }
 async function renderSharedSource(site, file, html, sources = null) {
   sources ||= await readSharedSources(site);
