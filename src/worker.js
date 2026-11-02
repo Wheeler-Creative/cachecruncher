@@ -24,6 +24,7 @@ const PRODUCTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95
 const COMMERCE_PRODUCT_PATHS = [];
 const PENDING_COLLECTION_SOURCES = {};
 const SUBSCRIBERS_CONFIGURED = false;
+const SHOP_PAGE_DESIGNED = false;
 const SUBSCRIBER_CAPTURE_TOKEN = "";
 const SUBSCRIBER_PLATFORM_ORIGIN = "https://jaybirddigital.com";
 const COMMERCE_PLATFORM_ORIGIN = "https://jaybirddigital.com";
@@ -722,18 +723,23 @@ async function commercePage(title, main, env, url, description = "") {
         .on('script[src="/app.js"]', { element() { sharedRuntime = true; } })
         .on("body", { element(element) { element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); }); } })
         .transform(homepage);
-      const commerceNavigation = await addCommerceNavigation(composed, env);
-      const ordered = typeof addOrderHistoryNavigation === "function" ? await addOrderHistoryNavigation(commerceNavigation, env) : commerceNavigation;
-      // After the store's own links are added: the page's own menu link is marked as the current one.
-      const navigated = /^[\w/.-]+$/.test(url.pathname)
-        ? new HTMLRewriter().on('a[href="' + url.pathname + '"]', { element(element) { element.setAttribute("aria-current", "page"); } }).transform(ordered) : ordered;
-      const response = new Response(navigated.body, navigated);
-      response.headers.set("cache-control", "no-store");
-      response.headers.append("Link", "<" + url.origin + url.pathname + ">; rel=canonical");
-      return withManagedFormCheck(response, env);
+      return finishCommercePage(composed, env, url);
     }
   }
   return new Response("The shared site layout is temporarily unavailable.", { status: 503, headers: { "retry-after": "5" } });
+}
+
+// What every store page gets on its way out, whichever page it was made from.
+async function finishCommercePage(composed, env, url) {
+  const commerceNavigation = await addCommerceNavigation(composed, env);
+  const ordered = typeof addOrderHistoryNavigation === "function" ? await addOrderHistoryNavigation(commerceNavigation, env) : commerceNavigation;
+  // After the store's own links are added: the page's own menu link is marked as the current one.
+  const navigated = /^[\w/.-]+$/.test(url.pathname)
+    ? new HTMLRewriter().on('a[href="' + url.pathname + '"]', { element(element) { element.setAttribute("aria-current", "page"); } }).transform(ordered) : ordered;
+  const response = new Response(navigated.body, navigated);
+  response.headers.set("cache-control", "no-store");
+  response.headers.append("Link", "<" + url.origin + url.pathname + ">; rel=canonical");
+  return withManagedFormCheck(response, env);
 }
 
 async function serveManagedEventPage(env, url, route) {
@@ -862,14 +868,48 @@ async function serveCommerceShop(env, url) {
   const columns = [2, 3, 4, 5, 6].includes(display.columns) ? display.columns : 0;
   const style = (columns ? '--ww-store-columns:' + columns + ';--ww-store-columns-md:' + Math.min(columns, 3) + ';' : "")
     + (ratio ? '--ww-store-ratio:' + ratio + ';' : "") + '--ww-store-fit:' + (display.photoFit === "fill" ? "cover" : "contain");
-  const look = ' data-ww-store-display data-ww-store-fit' + (display.photoShape === "natural" ? ' data-ww-store-natural' : "") + (cardStyle ? ' data-ww-store-cards="' + cardStyle + '"' : "")
-    + (columns ? ' data-ww-product-columns="' + columns + '"' : "")
-    + (ratio ? ' data-ww-product-image-ratio="' + ratio + '"' : "") + ' style="' + style + '"';
-  const main = '<section class="ww-shop" data-ww-behavior="commerce-store" data-ww-product-list data-ww-product-category="' + escapeStoreHtml(url.searchParams.get("category") || "*") + '"' + look
-    + (url.searchParams.get("cutoffDate") ? ' data-ww-product-cutoff="' + escapeStoreHtml(url.searchParams.get("cutoffDate")) + '"' : "") + '>'
-    + '<h1>' + escapeStoreHtml(settings.label) + '</h1>' + filterNote + (cards ? '<div class="ww-store-grid">' + cards + '</div>' + pagination
-      : '<p class="ww-store-empty">Products will appear here when they are available.</p>') + '</section>';
+  const attributes = { "data-ww-store-display": "", "data-ww-store-fit": "", ...(display.photoShape === "natural" ? { "data-ww-store-natural": "" } : {}),
+    ...(cardStyle ? { "data-ww-store-cards": cardStyle } : {}), ...(columns ? { "data-ww-product-columns": String(columns) } : {}),
+    ...(ratio ? { "data-ww-product-image-ratio": ratio } : {}), style };
+  const look = Object.entries(attributes).map(([name, value]) => ' ' + name + (value === "" ? "" : '="' + value + '"')).join("");
+  const category = url.searchParams.get("category") || "*";
+  const cutoff = url.searchParams.get("cutoffDate") || "";
+  const products = filterNote + (cards ? '<div class="ww-store-grid">' + cards + '</div>' + pagination
+    : '<p class="ww-store-empty">Products will appear here when they are available.</p>');
+  const designed = await designedShopPage(env, url, products, { ...attributes, "data-ww-product-category": category, ...(cutoff ? { "data-ww-product-cutoff": cutoff } : {}) });
+  if (designed) return designed;
+  const main = '<section class="ww-shop" data-ww-behavior="commerce-store" data-ww-product-list data-ww-product-category="' + escapeStoreHtml(category) + '"' + look
+    + (cutoff ? ' data-ww-product-cutoff="' + escapeStoreHtml(cutoff) + '"' : "") + '>'
+    + '<h1>' + escapeStoreHtml(settings.label) + '</h1>' + products + '</section>';
   return commercePage(settings.label, main, env, url);
+}
+
+// The store page a new website was written with keeps its design: the products go where the page marks them.
+async function designedShopPage(env, url, products, attributes) {
+  if (!SHOP_PAGE_DESIGNED || !env.ASSETS || typeof HTMLRewriter === "undefined") return null;
+  const asset = await env.ASSETS.fetch(new Request(new URL("/shop/", url.origin)));
+  if (!asset.ok || !String(asset.headers.get("content-type") || "").includes("text/html")) return null;
+  const page = await asset.text();
+  if (!/\bdata-ww-product-list\b/.test(page)) return null;
+  let sharedRuntime = false;
+  let placed = false;
+  const filled = new HTMLRewriter()
+    .on("[data-ww-product-list]", { element(element) {
+      if (placed) return;
+      placed = true;
+      for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+      element.setInnerContent(products, { html: true });
+    } })
+    .on('script[src="/app.js"]', { element() { sharedRuntime = true; } })
+    .on("body", { element(element) { element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); }); } })
+    .transform(new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } }));
+  return finishCommercePage(filled, env, url);
+}
+
+// An address with no page says so on the website's own layout, not as a blank tab.
+async function notFoundPage(env, url, missing) {
+  const page = await commercePage("Page not found", '<section class="ww-not-found"><h1>We can’t find that page</h1><p><a href="/">Go to the home page</a></p></section>', env, url);
+  return page.ok ? new Response(page.body, { status: 404, headers: page.headers }) : missing;
 }
 
 // A product with no picture yet: its initial on a quiet panel, so the card still looks finished.
@@ -1667,6 +1707,7 @@ const siteRequestHandler = {
       await addOrderHistoryNavigation(await addCommerceNavigation(await env.ASSETS.fetch(request), env), env), env, request
     );
     const type = response.headers.get("content-type") || "";
+    if (response.status === 404 && request.method === "GET" && !type.includes("text/html") && !/\.[a-z0-9]+$/i.test(url.pathname)) return notFoundPage(env, url, response);
     if (!type.includes("text/html") || !response.ok) return response;
     const canonical = new Response(response.body, response);
     canonical.headers.append("Link", `<${url.origin}${url.pathname}>; rel="canonical"`);

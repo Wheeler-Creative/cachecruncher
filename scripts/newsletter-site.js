@@ -46,6 +46,8 @@ export async function serveNewsletter(request, bucket, siteId, issues, { shell }
   const headers = { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" };
   const response = (body, status = 200) => new Response(request.method === "HEAD" ? null : body, { status, headers });
   if (!match) {
+    // Nothing to list is no page at all, and the visitor gets the website's own not-found page.
+    if (!issues.length) return null;
     const links = issues.map((issue) => `<li><a href="${newsletterPath(issue.id)}">${escape(issue.title)}</a> <time>${escape(issue.issueDate)}</time></li>`).join("");
     if (shell) {
       const home = await shell();
