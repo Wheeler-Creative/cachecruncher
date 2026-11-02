@@ -21,6 +21,7 @@ const EVENTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/
 const EVENTS_ICS_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/events/feed.ics";
 const UPDATES_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/updates/updates.json";
 const PRODUCTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/products/products.json";
+const STORE_NO_IMAGE = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"/><circle cx=\"9\" cy=\"10\" r=\"2\"/><path d=\"m21 16-5-5-9 9\"/></svg><span>No image</span>";
 const COMMERCE_PRODUCT_PATHS = [];
 const PENDING_COLLECTION_SOURCES = {};
 const SUBSCRIBERS_CONFIGURED = false;
@@ -913,9 +914,9 @@ async function notFoundPage(env, url, missing) {
   return page.ok ? new Response(page.body, { status: 404, headers: page.headers }) : missing;
 }
 
-// A product with no picture yet: its initial on a quiet panel, so the card still looks finished.
-function storeBlankPicture(product) {
-  return '<div class="ww-store-image-placeholder" aria-hidden="true">' + escapeStoreHtml(Array.from(String(product.title || "").trim())[0] || "") + '</div>';
+// A product with no picture yet: the same "No image" panel the store's own script draws.
+function storeBlankPicture() {
+  return '<div class="ww-store-image-placeholder" aria-hidden="true">' + STORE_NO_IMAGE + '</div>';
 }
 
 // Prices are stored in minor units; the currency says how many digits that is.
@@ -954,7 +955,7 @@ function storeCardMarkup(rows, display, timeZone) {
   const buyable = rows.some((row) => row.active && row.purchasable);
   if (cards === "photo") return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" aria-label="' + title + '" title="' + title + '">'
-    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="" loading="lazy">' : storeBlankPicture(product))
+    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="" loading="lazy">' : storeBlankPicture())
     + '</a><h2 class="ww-store-title ww-store-visually-hidden">' + title + '</h2></article>';
   const owned = Boolean(cards);
   const dates = parts.includes("dates") ? productOrderDates(product.catalog, timeZone, "en-US") : {};
@@ -968,7 +969,7 @@ function storeCardMarkup(rows, display, timeZone) {
   }).join('');
   return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" tabindex="-1" aria-hidden="true">'
-    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + title + '" loading="lazy">' : storeBlankPicture(product))
+    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + title + '" loading="lazy">' : storeBlankPicture())
     + '</a><h2 class="ww-store-title"><a href="' + href + '">' + title + '</a></h2>' + dateLine + detailLines + (!cards || parts.includes("price") ? storePriceMarkup(rows) : '')
     + (parts.includes("summary") && product.summary ? '<p class="ww-store-summary">' + escapeStoreHtml(product.summary) + '</p>' : '')
     + (buyable ? (owned ? '' : '<a class="ww-store-link" href="' + href + '">View details</a>') : '<p class="ww-store-status">' + (closed && parts.includes("dates") ? 'Pre-orders closed.' : 'Coming soon') + '</p>')

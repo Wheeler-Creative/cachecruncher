@@ -1,7 +1,8 @@
 
 .ww-commerce-main{max-width:1100px!important;margin:0 auto!important;padding:2rem 1.5rem 3rem!important}.ww-commerce-main h1{font-size:clamp(2rem,5vw,3.5rem);line-height:1.15;overflow-wrap:anywhere}
 
-.ww-store-image-placeholder{display:grid;place-items:center;aspect-ratio:4/3;width:100%;background:var(--surface,#f0f3f5);border:1px solid var(--line,#d7dfe5);border-radius:8px;color:var(--muted,#586875);font-family:var(--font-heading,inherit);font-size:clamp(2.5rem,6vw,4rem);line-height:1}
+.ww-store-image-placeholder{display:grid;place-content:center;justify-items:center;gap:.5rem;aspect-ratio:4/3;width:100%;background:var(--surface,#f0f3f5);border:1px solid var(--line,#d7dfe5);border-radius:8px;color:var(--muted,#586875);font-size:.95rem;line-height:1.2}
+.ww-store-image-placeholder svg{width:clamp(2rem,5vw,3rem);height:auto;opacity:.75}
 
 .ww-store-publication{display:grid;grid-template-columns:minmax(7rem,auto) minmax(0,1fr);gap:.5rem 1.5rem;margin-block:1.5rem}.ww-store-publication dt{font-weight:600}.ww-store-publication dd{margin:0;overflow-wrap:anywhere}@media(max-width:480px){.ww-store-publication{grid-template-columns:1fr;gap:.2rem}.ww-store-publication dd{margin-bottom:.6rem}}
 

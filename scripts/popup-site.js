@@ -7,7 +7,7 @@ import { POPUP_RUNTIME_SOURCE, POPUP_STYLES, normalizeDisplay, normalizePopup, p
 
 // 2: words over a full-flyer picture ("cover"), and buttons that can wear the website's own style.
 // 3: an owner's flyer with its words as live text over the picture ("layers"), in fonts the website serves itself.
-export const POPUPS_RENDER_VERSION = 3;
+export const POPUPS_RENDER_VERSION = 4;
 export const POPUP_SCRIPT_PATH = "/_ww/popups.js";
 export const POPUP_STYLE_PATH = "/_ww/popups.css";
 

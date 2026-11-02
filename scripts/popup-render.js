@@ -405,8 +405,10 @@ export const POPUP_STYLES = `.ww-popup{--ww-popup-bg:#fff;--ww-popup-ink:#1d232b
 @keyframes ww-popup-in{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes ww-popup-fade{from{opacity:0}to{opacity:1}}`;
 
-// The visitor's side: open after the delay, unless this visitor already saw it (once per visitor or per visit);
-// close on the close buttons, Escape or a click outside, and give focus back.
+// The visitor's side: open after the delay and the visitor's first scroll, tap or key, unless this visitor already saw
+// it (once per visitor or per visit); close on the close buttons, Escape or a click outside, and give focus back.
+// Waiting for them is for speed as much as manners: a picture shown before any input is timed as the page's largest
+// (Largest Contentful Paint), so a popup that opened by itself made the phone score.
 export const POPUP_RUNTIME_SOURCE = `(function(){
 var d=document.querySelector("dialog[data-ww-popup]");
 if(!d||typeof d.showModal!=="function")return;
@@ -427,5 +429,9 @@ back=document.activeElement;
 try{d.showModal();}catch(e){return;}
 try{if(store)store.setItem(key,String(Date.now()));}catch(e){}
 }
-setTimeout(open,delay*1000);
+var waited=false,touched=false,seen=["scroll","pointerdown","keydown","touchstart"];
+function ready(){if(waited&&touched)open();}
+function first(){if(touched)return;touched=true;seen.forEach(function(t){window.removeEventListener(t,first,true);});ready();}
+seen.forEach(function(t){window.addEventListener(t,first,{capture:true,passive:true});});
+setTimeout(function(){waited=true;ready();},delay*1000);
 })();`;
