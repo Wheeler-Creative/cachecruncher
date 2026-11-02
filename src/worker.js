@@ -897,6 +897,7 @@ async function designedShopPage(env, url, products, attributes) {
     .on("[data-ww-product-list]", { element(element) {
       if (placed) return;
       placed = true;
+      element.setAttribute("data-ww-shop-designed", "");
       for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
       element.setInnerContent(products, { html: true });
     } })
