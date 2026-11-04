@@ -7,7 +7,7 @@ export const NEWSLETTER_RENDER_VERSION = 5;
 
 // The script a web issue carries to fit each PDF glyph run to its column once the fonts are in. A fixed text, on
 // purpose: the portal shows the issue in its preview frame page, whose content security policy allows this script
-// by the hash of exactly this text (NEWSLETTER_FIT_SCRIPT_HASH in src/security-headers.js; the test recomputes it),
+// by the hash of exactly this text (NEWSLETTER_FIT_SCRIPT_HASH in src/core/security-headers.js; the test recomputes it),
 // so a change here is a change there. Customer websites serve it under their own headers.
 export const NEWSLETTER_FIT_SCRIPT = `(()=>{
 const fitNewsletter=()=>{

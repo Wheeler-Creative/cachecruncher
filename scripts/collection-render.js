@@ -11,7 +11,7 @@ import { cleanTarget } from "./newsletter-blocks.js";
 export const COLLECTIONS_RENDER_VERSION = 6;
 
 // look: "site" draws the list in the website's own design when one was kept from its pages (see
-// src/collection-stencil.js); "simple" always uses the layout below. Without a kept design both are the simple layout.
+// src/collections/collection-stencil.js); "simple" always uses the layout below. Without a kept design both are the simple layout.
 export const DESIGN_CHOICES = Object.freeze({
   look: Object.freeze(["site", "simple"]),
   layout: Object.freeze(["stacked", "side"]),
@@ -285,7 +285,7 @@ export function renderStencilList(list, stencil, { language = "en", items = [], 
   return { head: "", body: fillStencil(stencil.main, { items: renderStencilCards(list, stencil, items, { language }), "list-title": escape(title || list.title) }) };
 }
 
-// A page drawn from the pattern its set shares (src/page-pattern.js): every field goes back into the place it had on
+// A page drawn from the pattern its set shares (src/content/page-pattern.js): every field goes back into the place it had on
 // the website's own pages. A line is words; writing is drawn as the page marked its writing up; a photo, a link and
 // a choice fill their own slots; links to pages of another set are that set's pages (item.refs, written when the
 // website's files are) drawn in the card the website already used. `mark` wraps writing so a check can tell it

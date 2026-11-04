@@ -37,7 +37,7 @@ const CONTACT_FALLBACK_SENDER = "";
 // A migrated site's icon kept in media, served when the site has no /favicon.ico of its own.
 const FAVICON_MEDIA_PATH = "";
 const CONTACT_SITE_ID = "b97ce281-ffaf-4808-b4d6-9778c1d2d95e";
-// IndexNow: the search engines fetch this file to confirm the submitter controls the host (src/indexnow.js).
+// IndexNow: the search engines fetch this file to confirm the submitter controls the host (src/get-found/indexnow.js).
 const INDEXNOW_KEY = "4191c1807a314d0eb0f11091ad2ac0c4";
 const CONTACT_SITE_LABEL = "CacheCruncher";
 const CONTACT_RATE_SALT = "3ede3976d99d2c3df76ceecec0b06ffa78073b193cb19f77bcd6ddc2869bd370";
@@ -1718,7 +1718,7 @@ const siteRequestHandler = {
   }
 };
 
-// Every request passes the icon first (src/site-icon.js on the platform writes what it reads).
+// Every request passes the icon first (src/content/site-icon.js on the platform writes what it reads).
 const siteHandler = withSiteIcon(siteRequestHandler);
 
 // The owner's own content, resolved while the page streams.

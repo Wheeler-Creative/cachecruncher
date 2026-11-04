@@ -22,7 +22,7 @@ export const SITE_API_FILE = "src/site-api.js";
 // The binding names a site's wrangler.jsonc declares for this.
 export const SITE_API_LOADER = "SITE_API";
 // The names of the keys the owner saved, as a JSON list, written by the platform beside the
-// keys themselves (src/site-secrets.js). A list, never "every text value": the platform's own
+// keys themselves (src/sites/site-secrets.js). A list, never "every text value": the platform's own
 // secrets are text values on the same Worker.
 export const SITE_API_KEY_NAMES = "WW_SITE_KEYS";
 

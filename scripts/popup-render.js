@@ -6,7 +6,7 @@ import { cleanTarget } from "./newsletter-blocks.js";
 
 // "cover": the picture fills the flyer and the words sit over it, on a dark panel that keeps them readable whatever
 // the picture is. "image" is the picture alone, for artwork that already carries its own words. "layers" is such
-// artwork with its words lifted out (src/flyer-words.js): the picture without them, and the words drawn back over it as
+// artwork with its words lifted out (src/collections/flyer-words.js): the picture without them, and the words drawn back over it as
 // live text where they were, in a font close to the original, so a word can change without the picture being redrawn.
 export const POPUP_LAYOUTS = Object.freeze(["stacked", "side", "cover", "image", "text", "layers"]);
 export const MAX_POPUP_LAYERS = 30;
@@ -88,7 +88,7 @@ export function normalizeTheme(input = {}) {
   return theme;
 }
 
-// How the website draws its own buttons, as measured on the website (src/site-look.js): colours, corners, weight,
+// How the website draws its own buttons, as measured on the website (src/generation/site-look.js): colours, corners, weight,
 // capitals and spacing. Kept only when every part is a value this stylesheet can use, and never unreadable: a
 // label that does not stand out from its button is redrawn in black or white, whichever reads.
 export function normalizeButtonLook(input) {
