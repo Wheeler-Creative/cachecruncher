@@ -16156,6 +16156,17 @@ function buttonLike($2, node) {
 function safeButtonHref(href) {
   return /^(?:https?:\/\/[^\s"'<>]+|\/(?!\/)[^\s"'<>]*|#[^\s"'<>]+)$/i.test(href);
 }
+function closestIn($2) {
+  const matched = /* @__PURE__ */ new Map();
+  const isElement = (node) => node.type === "tag" || node.type === "script" || node.type === "style";
+  return (node, selector) => {
+    let found = matched.get(selector);
+    if (!found) matched.set(selector, found = new Set($2(selector).toArray()));
+    let at2 = node && node.type !== "root" && !isElement(node) ? node.parent : node;
+    for (; at2 && isElement(at2); at2 = at2.parent) if (found.has(at2)) return at2;
+    return null;
+  };
+}
 var MAX_TEXT_LENGTH = 2e3;
 var SINGLE_LINE_LENGTH = 120;
 var MAX_SLOT_ID = 63;
@@ -16198,6 +16209,7 @@ function slotShape(element, styles) {
 function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
   const source = String(html ?? "");
   const $2 = load6(source, { sourceCodeLocationInfo: true, withStartIndices: true });
+  const closest = closestIn($2);
   const blocks = findBlocks(source, { route: route2 });
   const blockAt = (offset2) => blocks.find((block) => offset2 >= block.start && offset2 < block.end)?.id || null;
   const proposed = [];
@@ -16264,7 +16276,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
       for (let parent = node.parent; parent; parent = parent.parent) if (NON_CONTENT.has(parent.tagName)) return true;
       return false;
     })();
-    if (hasElementChildren && buttonLike($2, node) && safeButtonHref(href) && !inChrome && !element.closest(COMMERCE_REGIONS).length && !element.closest("nav, header, footer, [data-ww-event-template]").length) {
+    if (hasElementChildren && buttonLike($2, node) && safeButtonHref(href) && !inChrome && !closest(node, COMMERCE_REGIONS) && !closest(node, "nav, header, footer, [data-ww-event-template]")) {
       const block = blockAt(offset2);
       if (!block) continue;
       const words = wholeText.replace(/[\s>›»→]+$/u, "").slice(0, 40).trim();
@@ -16297,7 +16309,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
   for (const node of $2([...TEXT_TAGS, ...LEAF_TAGS].join(",")).toArray()) {
     const element = $2(node);
     if (element.hasClass("ww-page-title")) continue;
-    if (claimed.has(node) || element.closest(COMMERCE_REGIONS).length) continue;
+    if (claimed.has(node) || closest(node, COMMERCE_REGIONS)) continue;
     const leafRole = LEAF_ROLES[node.tagName];
     if (leafRole && (element.attr("aria-hidden") === "true" || element.attr("hidden") !== void 0)) continue;
     const block = blockAt(offsetOf(node));
@@ -16343,7 +16355,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
   for (const node of $2(".image-placeholder, img, [role=img]").toArray()) {
     if (inNonContent(node)) continue;
     const element = $2(node);
-    if (element.closest(COMMERCE_REGIONS).length) continue;
+    if (closest(node, COMMERCE_REGIONS)) continue;
     const offset2 = offsetOf(node);
     const block = blockAt(offset2);
     if (!block) continue;
@@ -16380,7 +16392,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
   for (const node of $2("video").toArray()) {
     if (inNonContent(node)) continue;
     const element = $2(node);
-    if (element.closest(COMMERCE_REGIONS).length) continue;
+    if (closest(node, COMMERCE_REGIONS)) continue;
     const playing = videoSource(element);
     const offset2 = offsetOf(node);
     const block = blockAt(offset2);
@@ -16405,7 +16417,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
     });
   }
   const offered = new Set(proposed.map((entry) => entry.node));
-  const free = (node) => !offered.has(node) && !inNonContent(node) && !$2(node).closest(COMMERCE_REGIONS).length && (!node.attribs?.[EDIT_ATTRIBUTE] || node.attribs[KIND_ATTRIBUTE] === "background");
+  const free = (node) => !offered.has(node) && !inNonContent(node) && !closest(node, COMMERCE_REGIONS) && (!node.attribs?.[EDIT_ATTRIBUTE] || node.attribs[KIND_ATTRIBUTE] === "background");
   const background = (node, id2, declared) => {
     offered.add(node);
     const block = blockAt(offsetOf(node));
@@ -16442,7 +16454,7 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
   }
   const claimedNodes = new Set(proposed.map((entry) => entry.node));
   for (const entry of proposed) if (!entry.block && chromePartOf(entry.node)) entry.chrome = chromePartOf(entry.node);
-  proposed.push(...proposeChromeTags($2, { route: route2, claimed: claimedNodes, inContent: (node) => Boolean(blockAt(offsetOf(node))) }));
+  proposed.push(...proposeChromeTags($2, { route: route2, claimed: claimedNodes, inContent: (node) => Boolean(blockAt(offsetOf(node))), closest }));
   return proposed;
 }
 var CHROME_GROUPS = Object.freeze({ header: "Header", footer: "Footer" });
@@ -16484,7 +16496,7 @@ function hrefWords(href) {
   const path5 = text.replace(/index\.html?$/i, "").replace(/^[./#]+|[/#]+$/g, "");
   return path5 ? idWords(path5) : "home";
 }
-function proposeChromeTags($2, { route: route2, claimed, inContent }) {
+function proposeChromeTags($2, { route: route2, claimed, inContent, closest = closestIn($2) }) {
   const proposed = [];
   const roots = $2(CHROME_ROOTS).toArray().filter((node) => chromeRootOf(node) === node && !inContent(node));
   if (!roots.length) return proposed;
@@ -16515,18 +16527,18 @@ function proposeChromeTags($2, { route: route2, claimed, inContent }) {
     for (const node of inside) {
       if (node.type !== "tag" || claimed.has(node) || node.attribs?.[EDIT_ATTRIBUTE]) continue;
       const element = $2(node);
-      if (element.closest(CHROME_SKIP).length || element.closest(COMMERCE_REGIONS).length) continue;
-      if (node.parent && NON_CONTENT.has(node.parent.tagName) || element.closest("svg, template, noscript").length) continue;
-      const link = element.closest("a[href]");
-      if (link.length && link[0] !== node && (claimed.has(link[0]) || /^(?:tel|mailto):/i.test(String(link.attr("href"))) || socialFor(link.attr("href")))) continue;
+      if (closest(node, CHROME_SKIP) || closest(node, COMMERCE_REGIONS)) continue;
+      if (node.parent && NON_CONTENT.has(node.parent.tagName) || closest(node, "svg, template, noscript")) continue;
+      const link = closest(node, "a[href]");
+      if (link && link !== node && (claimed.has(link) || /^(?:tel|mailto):/i.test(String(link.attribs.href)) || socialFor(link.attribs.href))) continue;
       const offset2 = offsetOf(node);
       const words = element.text().replace(/\s+/g, " ").trim();
       const elementChildren = (node.children || []).some((child) => child.type === "tag");
-      const brand = element.closest("[data-ww-header-role='brand'], .ww-sh-brand, .navbar-brand, .brand, .logo").length > 0;
+      const brand = Boolean(closest(node, "[data-ww-header-role='brand'], .ww-sh-brand, .navbar-brand, .brand, .logo"));
       if (node.tagName === "img") {
         const name = String(element.attr("src") || "").split(/[?#]/)[0].split("/").pop() || "";
         if (!name || /^data:/i.test(String(element.attr("src")))) continue;
-        const logo = brand || element.closest("a[href='/'], a[href='./'], a[href='/index.html']").length > 0 || /logo/i.test(`${name} ${element.attr("alt") || ""} ${element.attr("class") || ""}`);
+        const logo = brand || Boolean(closest(node, "a[href='/'], a[href='./'], a[href='/index.html']")) || /logo/i.test(`${name} ${element.attr("alt") || ""} ${element.attr("class") || ""}`);
         if (!logo || part !== "header") continue;
         const n2 = next(`${part}:logo`);
         proposed.push({
@@ -16551,7 +16563,7 @@ function proposeChromeTags($2, { route: route2, claimed, inContent }) {
         if (!href || /^(?:tel|mailto|javascript|data):/i.test(href) || socialFor(href)) continue;
         const button = element.attr("data-ww-nav-button") !== void 0 || buttonLike($2, node);
         const name = words || String(element.attr("aria-label") || element.attr("title") || "").trim();
-        const inNav = element.closest("nav, [role='navigation'], #primary-nav").length > 0;
+        const inNav = Boolean(closest(node, "nav, [role='navigation'], #primary-nav"));
         const kindOf = part === "header" ? button ? "Menu button" : inNav ? "Menu" : "Link" : "Link";
         if (!elementChildren) {
           if (!words || !/[\p{L}\p{N}]/u.test(words) || words.length > SINGLE_LINE_LENGTH) continue;
@@ -16918,6 +16930,25 @@ async function readSharedSources(site, pending = null) {
   const shared = platformBehaviour && !/<script\b[^>]*src=["']\/app\.js["']/i.test(scripts || "") ? ((scripts || "").trim() + '\n<script src="/app.js" defer></script>').trim() : scripts;
   return { manifest: JSON.parse(metadata), template, head, header, footer, scripts: shared, languages: parseLanguages(languages) };
 }
+var TAGGED_CHROME_LIMIT = 16 * 1024 * 1024;
+var taggedChrome = /* @__PURE__ */ new Map();
+var taggedChromeSize = 0;
+function tagComposedChrome(html, route2) {
+  const key = route2 + "\0" + html;
+  const known = taggedChrome.get(key);
+  if (known !== void 0) return known;
+  const tagged = tagChrome(html, { route: route2 });
+  const size = key.length + tagged.length;
+  if (size > TAGGED_CHROME_LIMIT) return tagged;
+  for (const [oldest, value] of taggedChrome) {
+    if (taggedChromeSize + size <= TAGGED_CHROME_LIMIT) break;
+    taggedChrome.delete(oldest);
+    taggedChromeSize -= oldest.length + value.length;
+  }
+  taggedChrome.set(key, tagged);
+  taggedChromeSize += size;
+  return tagged;
+}
 async function renderSharedSource(site, file, html, sources = null) {
   sources ||= await readSharedSources(site);
   const { manifest, template } = sources;
@@ -16934,7 +16965,7 @@ async function renderSharedSource(site, file, html, sources = null) {
     if (!(key in manifest.headNodes)) throw Error("Missing shared head node");
     return manifest.headNodes[key];
   }).join("\n"), header: markCurrent(chrome.header, route(file)), content: html, footer: chrome.footer, scripts: page.scripts?.trim() ? page.scripts : sources.scripts };
-  return tagChrome(renderDocumentLayout(values, template), { route: route(file) });
+  return tagComposedChrome(renderDocumentLayout(values, template), route(file));
 }
 async function compileSharedSite(site, { check = false, strictLanguages = null } = {}) {
   if (!check) await adoptSharedLayout(site);
