@@ -406,6 +406,25 @@ export function internalMediaRequest(request) {
   } catch { return true; }
 }
 
+// When each page last changed, from the platform's daily look at the live pages (src/indexnow.js publishes
+// site-integrations/<id>/page-dates.json), so Google reads the changed pages first. A page with no date is listed as
+// it was rather than with a guess, and a <lastmod> the site's own sitemap already gives is kept.
+export function addSitemapDates(xml, document) {
+  let pages;
+  try { pages = JSON.parse(document || "{}").pages; } catch { return xml; }
+  if (!pages || typeof pages !== "object") return xml;
+  return String(xml).replace(/<url>([\s\S]*?)<\/url>/g, (entry, inner) => {
+    if (/<lastmod>/.test(inner)) return entry;
+    const loc = /<loc>\s*([^<]+?)\s*<\/loc>/.exec(inner)?.[1];
+    if (!loc) return entry;
+    let path;
+    try { path = new URL(loc.replaceAll("&amp;", "&"), "https://site.invalid").pathname; } catch { return entry; }
+    const at = pages[path];
+    if (typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at)) return entry;
+    return entry.replace(/<\/loc>/, `</loc><lastmod>${at}</lastmod>`);
+  });
+}
+
 export function withSiteContent(handler, options = {}) {
   const read = siteContentReader(options);
   const siteId = /^site-content\/([^/]+)\.json$/.exec(options.key || "")?.[1];
@@ -414,6 +433,7 @@ export function withSiteContent(handler, options = {}) {
   const readWebApp = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/web-app.json` : "" });
   const readNewsletter = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/newsletter.json` : "" });
   const readSecurity = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/security.json` : "" });
+  const readPageDates = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/page-dates.json` : "" });
   const pdfMatches = new Map();
   // The blog and repeating pages: a small index read on every page (for the menu), each list's own file on its pages.
   const readCollections = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/collections.json` : "" });
@@ -583,7 +603,8 @@ export function withSiteContent(handler, options = {}) {
             ...(faqs.page ? [FAQ_PAGE_PATH] : []),
             ...(issues.length ? ["/newsletter/", ...issues.map((issue) => newsletterPath(issue.id))] : [])
           ];
-          const listed = addSitemapPages(collectionSitemap(text, collections, origin), served, origin);
+          const dates = siteId ? await readPageDates(env).catch(() => "") : "";
+          const listed = addSitemapDates(addSitemapPages(collectionSitemap(text, collections, origin), served, origin), dates);
           if (/<image:loc>\s*\/(?!\/)/.test(listed) || listed !== text) {
             const headers = new Headers(response.headers);
             headers.delete("content-length");
