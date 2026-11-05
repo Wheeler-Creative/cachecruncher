@@ -29,10 +29,10 @@ on:
       - "scripts/accessibility*.mjs"
       - "scripts/remediate-accessibility.mjs"
       - "scripts/verify-preview-accessibility.mjs"
+  # A change is scanned where it landed, and a dispatch scans every page. There is no weekly pass (removed November
+  # 2026): a site's pages change only through a push, which is scanned here, and a scheduled scan of every site
+  # grew the runner bill with every site added while finding nothing new.
   workflow_dispatch:
-  # A change is scanned where it landed; this weekly pass looks at every page.
-  schedule:
-    - cron: "23 6 * * 1"
 
 permissions:
   contents: write

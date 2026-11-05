@@ -244,9 +244,13 @@ export function addSchedulerNav(response, snapshot) {
 // The words are the brand and nothing else; the address is the same on every site. It is a paragraph of the footer, so
 // it takes the footer's own text colour (which the site's checks already hold to AA), and its link is underlined with a
 // 44px target. It goes in the first footer outside the page's content (an article's or a quotation's footer is not the
-// site's), at the end of the page in a footer of its own when there is none, and nowhere when the footer already links to us.
+// site's), at the end of the page in a footer of its own when there is none, and nowhere when the footer already links to
+// us or already names us: a footer the build wrote with its own "Website by Jaybird Digital" (a brief that carried the
+// plan's sentence about the credit, 2026-11-04) would otherwise show it twice. The builder strips such a line
+// (stripPlatformCredit in scripts/generation/generate-site-build.mjs), so this is the second guard, not the first.
 // It speaks the page's language (its <html lang>, which a Turkish-first site's Worker is not told), else the one given.
-export const CREDIT_RENDER_VERSION = 1;
+// 2: a footer that already names Jaybird Digital gets no second credit (2026-11-04).
+export const CREDIT_RENDER_VERSION = 2;
 export const SITE_CREDIT_URL = "https://jaybirddigital.com/?ref=site";
 const CREDIT_WORDS = { en: "Website by Jaybird Digital", tr: "Jaybird Digital tarafından hazırlandı", de: "Website von Jaybird Digital",
   es: "Sitio web creado por Jaybird Digital", fr: "Site réalisé par Jaybird Digital" };
@@ -260,12 +264,20 @@ export function renderSiteCredit(language = "en") {
   return `${CREDIT_STYLE}<p class="ww-credit" data-ww-credit><a href="${SITE_CREDIT_URL}">${creditWords(language)}</a></p>`;
 }
 const OURS = /^https?:\/\/(?:www\.)?jaybirddigital\.com(?:[/?#]|$)/i;
+const NAMED = /\bJaybird\s+Digital\b/i;
 export function addSiteCredit(response, { shown = true, language = "en" } = {}) {
   if (!shown || typeof HTMLRewriter === "undefined") return response;
   if (!response?.ok || !String(response.headers?.get?.("content-type") || "").includes("text/html")) return response;
-  let inside = 0, footer = 0, placed = false, linked = false, spoken = language;
+  let inside = 0, footer = 0, placed = false, linked = false, named = false, tail = "", spoken = language;
   const credit = () => renderSiteCredit(spoken);
   return new HTMLRewriter()
+    .onDocument({ text(chunk) {
+      // The footer's words arrive in pieces, so the end of the last piece is kept to catch a name split between two.
+      if (!footer || named) return;
+      const text = tail + chunk.text;
+      if (NAMED.test(text)) named = true;
+      tail = text.slice(-40);
+    } })
     .on("html", { element(element) {
       const lang = creditLanguage(element.getAttribute("lang"));
       if (CREDIT_WORDS[lang]) spoken = lang;
@@ -281,7 +293,7 @@ export function addSiteCredit(response, { shown = true, language = "en" } = {}) 
       element.onEndTag((end) => {
         footer -= 1;
         placed = true;
-        if (!linked) end.before(credit(), { html: true });
+        if (!linked && !named) end.before(credit(), { html: true });
       });
     } })
     .on("a[href]", { element(element) {

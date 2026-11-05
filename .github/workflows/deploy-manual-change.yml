@@ -1,5 +1,14 @@
 name: Deploy manual website change
 
+# ONE JOB PER PUSH. GitHub bills every job as at least a minute, and this is the only workflow a site runs on a push
+# to main: it validates and deploys a change made by hand, and refreshes the code index the website agent searches
+# (until November 2026 that was a second workflow, index-managed-code.yml, and a third job decided whether to deploy).
+#
+# The platform deploys its own commits:
+#   - an edit ("Website request <id>") was deployed by the build that made it, so here it is only indexed;
+#   - a runtime upgrade is pushed with [skip ci] and deployed and indexed by the platform's rollout job
+#     (scripts/delivery/upgrade-site-runtimes.mjs), so it starts nothing here.
+# Every phase is scripts/managed-site/deploy-site.mjs, the same script the rollout runs.
 on:
   push:
     branches: [main]
@@ -15,24 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  source:
-    runs-on: ubuntu-latest
-    outputs:
-      skip: ${{ steps.source.outputs.skip }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: source
-        run: |
-          subject=$(git log -1 --pretty=%s)
-          if [[ "$GITHUB_EVENT_NAME" == "push" && "$subject" =~ ^Website\ request\ [0-9a-fA-F-]{36}$ ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
+  # The job keeps the name "deploy": site-test-runner.mjs finds the last deployed commit by it.
   deploy:
-    needs: source
-    if: ${{ needs.source.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -45,29 +38,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Decide whether this push is the platform's own edit
+        id: source
+        run: |
+          subject=$(git log -1 --pretty=%s)
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$subject" =~ ^Website\ request\ [0-9a-fA-F-]{36}$ ]]; then
+            echo "platform-edit=true" >> "$GITHUB_OUTPUT"
+            echo "An edit the platform already deployed: indexing only."
+          else
+            echo "platform-edit=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install dependencies
-        run: if [[ -f package-lock.json ]]; then npm ci; else npm install --no-package-lock; fi
+        id: install
+        run: node scripts/managed-site/deploy-site.mjs install
+      # Runs: npm run build --if-present, npm run build:data --if-present, npm run lint --if-present,
+      # node scripts/managed-site/site-test-runner.mjs, npm run check --if-present, node --check src/worker.js,
+      # npx wrangler deploy --dry-run.
       - name: Validate manual change
+        if: ${{ steps.source.outputs.platform-edit != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          npm run build --if-present
-          npm run build:data --if-present
-          npm run lint --if-present
-          node scripts/managed-site/site-test-runner.mjs
-          npm run check --if-present
-          node --check src/worker.js
-          npx wrangler deploy --dry-run
+        run: node scripts/managed-site/deploy-site.mjs validate
+      # Runs: npm run build --if-present, npx wrangler deploy --keep-vars, and records which media the site links to.
       - name: Deploy production
+        if: ${{ steps.source.outputs.platform-edit != 'true' }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          npm run build --if-present
-          npx wrangler deploy --keep-vars
-      - name: Record which media the deployed site links to
-        if: ${{ hashFiles('scripts/managed-site/media-links.mjs') != '' }}
+        run: node scripts/managed-site/deploy-site.mjs deploy
+      # The index describes what is in the repository, so it is refreshed even when the deploy failed.
+      - name: Refresh searchable source context
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLATFORM_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/managed-site/media-links.mjs --publish
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # A FIRST push starts this workflow before the coordinator processes
+          # site.assemble's completed result and writes site_repositories. Keep
+          # a bounded window for that coordinator handoff and API propagation.
+          INDEX_REGISTRATION_ATTEMPTS: "30"
+          INDEX_REGISTRATION_WAIT_MS: "10000"
+        run: node scripts/managed-site/deploy-site.mjs index
