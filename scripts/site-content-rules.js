@@ -414,6 +414,10 @@ const GOOGLE_FILE = /^google[0-9a-f]{16}\.html$/;
 const BING_TOKEN = /^[A-Fa-f0-9]{32}$/;
 const GA4_ID = /^G-[A-Z0-9]{4,15}$/;
 const GTM_ID = /^GTM-[A-Z0-9]{4,10}$/;
+// Pinterest's website claim (p:domain_verify) and Meta's domain verification (facebook-domain-verification), which
+// their catalogs ask for before they take a shop's product feed.
+const PINTEREST_TOKEN = /^[a-f0-9]{32}$/;
+const FACEBOOK_TOKEN = /^[a-z0-9]{20,60}$/;
 const MAX_VERIFICATIONS = 5;
 
 export function normalizeSeo(raw) {
@@ -425,13 +429,17 @@ export function normalizeSeo(raw) {
   const bing = BING_TOKEN.test(String(raw.bing ?? "").trim()) ? String(raw.bing).trim().toUpperCase() : "";
   const ga4 = GA4_ID.test(String(raw.ga4 ?? "").trim().toUpperCase()) ? String(raw.ga4).trim().toUpperCase() : "";
   const gtm = GTM_ID.test(String(raw.gtm ?? "").trim().toUpperCase()) ? String(raw.gtm).trim().toUpperCase() : "";
-  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm) return null;
+  const pinterest = PINTEREST_TOKEN.test(String(raw.pinterest ?? "").trim().toLowerCase()) ? String(raw.pinterest).trim().toLowerCase() : "";
+  const facebook = FACEBOOK_TOKEN.test(String(raw.facebook ?? "").trim().toLowerCase()) ? String(raw.facebook).trim().toLowerCase() : "";
+  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook) return null;
   return {
     ...(googleMeta.length ? { googleMeta } : {}),
     ...(googleFile.length ? { googleFile } : {}),
     ...(bing ? { bing } : {}),
     ...(ga4 ? { ga4 } : {}),
-    ...(gtm ? { gtm } : {})
+    ...(gtm ? { gtm } : {}),
+    ...(pinterest ? { pinterest } : {}),
+    ...(facebook ? { facebook } : {})
   };
 }
 
@@ -446,6 +454,8 @@ export function seoHeadHtml(seo) {
   return [
     ...(settings.googleMeta || []).map((token) => tag("google-site-verification", token)),
     ...(settings.bing ? [tag("msvalidate.01", settings.bing)] : []),
+    ...(settings.pinterest ? [tag("p:domain_verify", settings.pinterest)] : []),
+    ...(settings.facebook ? [tag("facebook-domain-verification", settings.facebook)] : []),
     ...(settings.ga4 ? [
       `<script async src="https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(settings.ga4)}"></script>`
       + "<script>window.dataLayer=window.dataLayer||[];"

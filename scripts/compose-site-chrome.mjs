@@ -8970,6 +8970,8 @@ var GOOGLE_FILE = /^google[0-9a-f]{16}\.html$/;
 var BING_TOKEN = /^[A-Fa-f0-9]{32}$/;
 var GA4_ID = /^G-[A-Z0-9]{4,15}$/;
 var GTM_ID = /^GTM-[A-Z0-9]{4,10}$/;
+var PINTEREST_TOKEN = /^[a-f0-9]{32}$/;
+var FACEBOOK_TOKEN = /^[a-z0-9]{20,60}$/;
 var MAX_VERIFICATIONS = 5;
 function normalizeSeo(raw) {
   if (!raw || typeof raw !== "object") return null;
@@ -8979,13 +8981,17 @@ function normalizeSeo(raw) {
   const bing = BING_TOKEN.test(String(raw.bing ?? "").trim()) ? String(raw.bing).trim().toUpperCase() : "";
   const ga4 = GA4_ID.test(String(raw.ga4 ?? "").trim().toUpperCase()) ? String(raw.ga4).trim().toUpperCase() : "";
   const gtm = GTM_ID.test(String(raw.gtm ?? "").trim().toUpperCase()) ? String(raw.gtm).trim().toUpperCase() : "";
-  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm) return null;
+  const pinterest = PINTEREST_TOKEN.test(String(raw.pinterest ?? "").trim().toLowerCase()) ? String(raw.pinterest).trim().toLowerCase() : "";
+  const facebook = FACEBOOK_TOKEN.test(String(raw.facebook ?? "").trim().toLowerCase()) ? String(raw.facebook).trim().toLowerCase() : "";
+  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook) return null;
   return {
     ...googleMeta.length ? { googleMeta } : {},
     ...googleFile.length ? { googleFile } : {},
     ...bing ? { bing } : {},
     ...ga4 ? { ga4 } : {},
-    ...gtm ? { gtm } : {}
+    ...gtm ? { gtm } : {},
+    ...pinterest ? { pinterest } : {},
+    ...facebook ? { facebook } : {}
   };
 }
 var ALT_MAX = 300;
