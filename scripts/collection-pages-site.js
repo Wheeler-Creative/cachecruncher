@@ -148,10 +148,18 @@ export function composeCollectionPage(shell, fragment, { title = "", summary = "
       element.prepend(`<base href="${escape(origin)}/">`, { html: true });
       element.append(head, { html: true });
     } });
+  // A page lent without a title or a description tag of its own still gets the page's: added before its head closes.
+  let titled = false, described = false;
+  rewriter = rewriter.on("head", { element(element) {
+    element.onEndTag((end) => {
+      if (!ownHead && !titled && title) end.before(`<title>${escape(title)}</title>`, { html: true });
+      if (summary && !described) end.before(`<meta name="description" content="${escape(summary)}">`, { html: true });
+    });
+  } });
   if (!ownHead) {
     let words = "", drawn = false;
     rewriter = rewriter.on("title", {
-      element(element) { element.onEndTag((end) => { if (!drawn) end.before(title); }); },
+      element(element) { titled = true; element.onEndTag((end) => { if (!drawn) end.before(title); }); },
       text(chunk) {
         words += chunk.text;
         if (!chunk.lastInTextNode) { chunk.remove(); return; }
@@ -162,7 +170,10 @@ export function composeCollectionPage(shell, fragment, { title = "", summary = "
   }
   // The owner's words above the list, when there are any, describe the page even where it keeps its own title.
   if (!ownHead || summary) {
-    rewriter = rewriter.on('meta[name="description"],meta[property="og:description"],meta[name="twitter:description"]', { element(element) { element.setAttribute("content", summary); } });
+    rewriter = rewriter.on('meta[name="description"],meta[property="og:description"],meta[name="twitter:description"]', { element(element) {
+      if (element.getAttribute("name") === "description") described = true;
+      element.setAttribute("content", summary);
+    } });
   }
   if (keepMain && !ownHead) {
     // The page lent its design is another post: what it said about itself goes.

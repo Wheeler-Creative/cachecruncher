@@ -497,6 +497,27 @@ export function creditShown(content) {
 export const SERVED_IMAGE_WIDTH = 1600;
 // Narrower than this a library picture is a logo or an icon, not what the page opens with.
 const MAIN_PICTURE_WIDTH = 600;
+// The widths a library picture is offered in (the site's picture route makes any width it is asked for). A picture
+// narrower than the second is light enough already; one a page asks for at less than a phone's width is a deliberate
+// small picture (a card, a thumbnail) and keeps its one address.
+const RESPONSIVE_WIDTHS = [480, 800, 1200];
+const RESPONSIVE_MIN_WIDTH = 800;
+const PHONE_SCREEN_WIDTH = 1080;
+
+/**
+ * The srcset a library picture is given, so a phone downloads the width it shows instead of the one address every
+ * screen shares. Never wider than the page sends today (its ?w=, else SERVED_IMAGE_WIDTH) or than the picture itself.
+ * "" when the address is not a top-level library picture, the picture is narrow, or it already asks for a small width.
+ */
+export function responsiveSrcset(src, naturalWidth) {
+  const match = /^((?:\.?\/)?images\/[^/?#]+\.(?:jpe?g|png|webp|avif))(?:\?w=(\d{2,5}))?$/i.exec(String(src ?? "").trim());
+  if (!match || !(naturalWidth >= RESPONSIVE_MIN_WIDTH)) return "";
+  const asked = match[2] ? Number(match[2]) : 0;
+  if (asked && asked < PHONE_SCREEN_WIDTH) return "";
+  const widest = Math.min(naturalWidth, asked || SERVED_IMAGE_WIDTH, SERVED_IMAGE_WIDTH);
+  const widths = [...RESPONSIVE_WIDTHS.filter((width) => width < widest * 0.85), widest];
+  return widths.length > 1 ? widths.map((width) => `${match[1]}?w=${width} ${width}w`).join(", ") : "";
+}
 
 export function parseImageIndex(text) {
   let parsed = null;
@@ -1040,6 +1061,17 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
           mainPicture = true;
           if (element.getAttribute("loading") === "lazy") element.removeAttribute("loading");
           if (element.getAttribute("fetchpriority") === null) element.setAttribute("fetchpriority", "high");
+        }
+        // A phone is sent the width it shows (owner, 2026-11-07: speed where it makes an impact). Google's phone test
+        // found Halt the Hate's emblem sent 1080 pixels wide for a 579-pixel box, its main content half a second late.
+        // The browser takes the smallest width that fills the box: a lazy picture by its laid-out width (auto), the
+        // rest by the screen's. A page's own srcset is left alone, and its own sizes is kept.
+        if (element.getAttribute("srcset") === null) {
+          const srcset = responsiveSrcset(element.getAttribute("src"), known.w);
+          if (srcset) {
+            element.setAttribute("srcset", srcset);
+            if (element.getAttribute("sizes") === null) element.setAttribute("sizes", element.getAttribute("loading") === "lazy" ? "auto, 100vw" : "100vw");
+          }
         }
         // aspect-ratio reserves the space without distorting a photo the stylesheet sizes by one side only.
         if (known.w && known.h && element.getAttribute("width") === null && element.getAttribute("height") === null

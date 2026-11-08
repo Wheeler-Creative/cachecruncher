@@ -11,22 +11,25 @@
 
 import { composeCollectionPage } from "./collection-pages-site.js";
 
-// 1: the page and its menu button. A website's Worker that answers with a lower x-ww-dated is brought up to date
-// through the site runtime upgrade, never through an edit.
-export const DATED_RENDER_VERSION = 1;
+// 1: the page and its menu button. 2: the page's own search title and description (page.title, page.description),
+// so the menu's one word is not the title search results show. A website's Worker that answers with a lower x-ww-dated
+// is brought up to date through the site runtime upgrade, never through an edit.
+export const DATED_RENDER_VERSION = 2;
 
 const escape = (text) => String(text ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const PATH = /^\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/;
 const line = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 
-// What the owner chose for the page: its name, its address and whether it is in the menu. Nothing else from a
-// snapshot is trusted to draw a page.
+// What the owner chose for the page: its name, its address, whether it is in the menu, and the title and description
+// search results show for it (the name when there is no title). Nothing else from a snapshot is trusted to draw a page.
 export function datedPageSettings(input) {
   const page = input && typeof input === "object" ? input : null;
   const path = String(page?.path || "").trim().toLowerCase();
   const label = line(page?.label, 40);
   if (!page || !PATH.test(path) || !label) return null;
-  return { path, label, nav: page.nav === "button" ? "button" : "none" };
+  const title = line(page.title, 70);
+  const description = line(page.description, 300);
+  return { path, label, nav: page.nav === "button" ? "button" : "none", ...(title ? { title } : {}), ...(description ? { description } : {}) };
 }
 
 // The published snapshot, as far as a page needs it.
@@ -135,12 +138,12 @@ export async function serveDatedPage(request, snapshot, { shell, language = "en"
   const home = shell ? await Promise.resolve().then(() => shell("/")).catch(() => null) : null;
   const fragment = renderDatedFragment(snapshot, { language, now });
   if (home?.ok && (home.headers.get("content-type") || "").includes("text/html")) {
-    const composed = composeCollectionPage(home, fragment, { title: page.label, summary: "", origin: url.origin, canonical: `${url.origin}${page.path}` });
+    const composed = composeCollectionPage(home, fragment, { title: page.title || page.label, summary: page.description || "", origin: url.origin, canonical: `${url.origin}${page.path}` });
     composed.headers.set("x-ww-dated-page", "1");
     return request.method === "HEAD" ? new Response(null, composed) : composed;
   }
   await home?.body?.cancel?.();
-  return new Response(request.method === "HEAD" ? null : `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(page.label)}</title>${fragment.head}</head><body style="margin:0;font-family:system-ui,sans-serif;color:#1f2328;background:#fff"><main>${fragment.body}</main></body></html>`,
+  return new Response(request.method === "HEAD" ? null : `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(page.title || page.label)}</title>${page.description ? `<meta name="description" content="${escape(page.description)}">` : ""}${fragment.head}</head><body style="margin:0;font-family:system-ui,sans-serif;color:#1f2328;background:#fff"><main>${fragment.body}</main></body></html>`,
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 

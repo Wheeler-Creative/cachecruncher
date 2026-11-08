@@ -21,6 +21,7 @@ const EVENTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/
 const EVENTS_ICS_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/events/feed.ics";
 const UPDATES_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/updates/updates.json";
 const PRODUCTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/products/products.json";
+const STORE_FILES_PREFIX = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/products/";
 const STORE_NO_IMAGE = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"/><circle cx=\"9\" cy=\"10\" r=\"2\"/><path d=\"m21 16-5-5-9 9\"/></svg><span>No image</span>";
 const COMMERCE_PRODUCT_PATHS = [];
 const PENDING_COLLECTION_SOURCES = {};
@@ -304,19 +305,74 @@ async function serveUpdateSnapshot(request, env) {
   return new Response(object.body, { headers });
 }
 
-let commerceSnapshotCache = { checkedAt: 0, value: null };
-async function readCommerceSnapshot(env) {
-  if (commerceSnapshotCache.checkedAt > Date.now() - 1000) return commerceSnapshotCache.value ? projectShopCatalog(commerceSnapshotCache.value, new URLSearchParams()) : null;
-  if (!env.MEDIA) return null;
-  const object = await env.MEDIA.get(PRODUCTS_JSON_KEY);
-  if (!object) {
-    commerceSnapshotCache = { checkedAt: Date.now(), value: null };
-    return null;
+// The shop as published for this website (src/commerce/store-layout.js). A shop on the split layout is its settings
+// (store.json, read again every second) and its list (list.json, parsed once per version); an older shop is one file
+// (products.json). The same version is the same object, so the projection over every product is worked out once per
+// version for a few seconds, not on every call.
+let commerceSnapshotCache = { checkedAt: 0, key: "", raw: null };
+let storeListCache = { version: "", rows: null };
+let storeProjectionCache = { raw: null, at: 0, value: null };
+async function readStoreState(env) {
+  if (commerceSnapshotCache.checkedAt > Date.now() - 1000) return commerceSnapshotCache;
+  const previous = commerceSnapshotCache;
+  let key = "", raw = null;
+  const settings = env.MEDIA ? await env.MEDIA.get(STORE_FILES_PREFIX + "store.json").catch(() => null) : null;
+  if (settings) {
+    try {
+      const store = JSON.parse(await settings.text());
+      if (store.listVersion && storeListCache.version !== store.listVersion) {
+        const object = await env.MEDIA.get(STORE_FILES_PREFIX + "list.json").catch(() => null);
+        const list = object ? JSON.parse(await object.text()) : null;
+        // A list newer than the settings is used, and read again until the settings catch up.
+        if (list) storeListCache = { version: list.version === store.listVersion ? list.version : "", rows: Array.isArray(list.products) ? list.products : [] };
+      }
+      key = "store " + (settings.etag || settings.httpEtag || "") + " " + store.listVersion + " " + storeListCache.version;
+      raw = { ...store, products: storeListCache.rows || [], sourceProducts: [], storeLayout: Number(store.layout) || 3 };
+    } catch { raw = null; key = ""; }
   }
-  try {
-    commerceSnapshotCache = { checkedAt: Date.now(), value: JSON.parse(await object.text()) };
-  } catch { commerceSnapshotCache = { checkedAt: Date.now(), value: null }; }
-  return commerceSnapshotCache.value ? projectShopCatalog(commerceSnapshotCache.value, new URLSearchParams()) : null;
+  if (!raw && env.MEDIA) {
+    const object = await env.MEDIA.get(PRODUCTS_JSON_KEY).catch(() => null);
+    if (object) {
+      try { raw = JSON.parse(await object.text()); key = "file " + (object.etag || object.httpEtag || ""); } catch { raw = null; key = ""; }
+    }
+  }
+  if (key && key.trim() !== "file" && previous.key === key && previous.raw) raw = previous.raw;
+  commerceSnapshotCache = { checkedAt: Date.now(), key, raw };
+  return commerceSnapshotCache;
+}
+
+async function readCommerceSnapshot(env) {
+  const { raw } = await readStoreState(env);
+  if (!raw) return null;
+  if (storeProjectionCache.raw !== raw || storeProjectionCache.at < Date.now() - 15000) {
+    storeProjectionCache = { raw, at: Date.now(), value: projectShopCatalog(raw, new URLSearchParams()) };
+  }
+  return storeProjectionCache.value;
+}
+
+// One product page, with everything its page shows. On the split layout its rows come from its product file, with the
+// list's price, stock and availability over them: the list is always current, a product file can be a minute behind it.
+async function readStoreDetail(env, pathname) {
+  const snapshot = await readCommerceSnapshot(env);
+  if (!snapshot) return null;
+  const params = new URLSearchParams([["view", "detail"], ["path", pathname]]);
+  const { raw } = commerceSnapshotCache;
+  if (!raw?.storeLayout) return projectShopCatalog(snapshot, params);
+  const route = (value) => { let text = String(value || "/"); while (text.length > 1 && text.endsWith("/")) text = text.slice(0, -1); return text; };
+  const listed = (raw.products || []).filter((row) => route(row.sourcePath) === route(pathname));
+  const full = new Map();
+  for (const name of [...new Set(listed.map((row) => row.chunk).filter(Boolean))]) {
+    const object = await env.MEDIA.get(STORE_FILES_PREFIX + "p/" + name + ".json").catch(() => null);
+    try { for (const row of (object ? JSON.parse(await object.text()).rows : null) || []) full.set(row.id, row); } catch { /* the list row alone */ }
+  }
+  const rows = listed.map((row) => {
+    const stored = full.get(row.id);
+    if (!stored) return row;
+    const current = { ...row };
+    delete current.description;
+    return { ...stored, ...current, catalog: { ...stored.catalog, ...current.catalog } };
+  });
+  return projectShopCatalog({ ...raw, products: rows, sourceProducts: [] }, params);
 }
 
 // How the owner set the store up in the menu (shop console, Settings); the platform defaults otherwise.
@@ -686,14 +742,13 @@ function productOrderDates(catalog, timeZone, locale) {
 
 const STORE_PHOTO_RATIOS = {"square":1,"portrait":0.75,"landscape":1.333};
 
+// x-ww-store says which store layout this server reads (src/commerce/store-layout.js), so the platform knows when a shop
+// too big for the one-file layout can be published for this website.
 async function serveCommerceSnapshot(request, env) {
   const params = new URL(request.url).searchParams;
-  if (["list", "detail", "cart"].includes(params.get("view"))) {
-    const snapshot = await readCommerceSnapshot(env);
-    return Response.json(projectShopCatalog(snapshot || { enabled: false, siteId: CONTACT_SITE_ID }, params), { headers: { "cache-control": "no-store" } });
-  }
-  const snapshot = await readCommerceSnapshot(env);
-  return Response.json(projectShopCatalog(snapshot || { enabled: false, siteId: CONTACT_SITE_ID }, params), { headers: { "cache-control": "no-store" } });
+  const headers = { "cache-control": "no-store", "x-ww-store": "3" };
+  const snapshot = params.get("view") === "detail" ? await readStoreDetail(env, params.get("path") || "/") : await readCommerceSnapshot(env);
+  return Response.json(projectShopCatalog(snapshot || { enabled: false, siteId: CONTACT_SITE_ID }, params), { headers });
 }
 
 function escapeStoreHtml(value) {
@@ -770,7 +825,7 @@ async function serveManagedEventPage(env, url, route) {
 }
 
 async function serveCommerceProductPage(request, env, pathname) {
-  const snapshot = await readCommerceSnapshot(env);
+  const snapshot = await readStoreDetail(env, pathname);
   const route = pathname.endsWith("/") ? pathname : pathname + "/";
   const products = [...(snapshot?.sourceProducts || []), ...(snapshot?.products || [])];
   const product = products.find((entry) => {
@@ -1931,6 +1986,17 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
   projectShopCatalog, shopCollectionIndex, shopMenuFilter, resolveShopCollection, legacycommerceRoutes,
   legacyaddCommerceNavigation, legacyaddCommerceRoutesToManifest, legacyaddCommerceRoutesToSitemap, storeBannerColorRules
 }) {
+  // A page's menus and links count the shop's products many times over; each count is worked out once per published
+  // shop. readCommerceSnapshot hands back the same object for a few seconds, so this lasts that long and no longer.
+  const memo = new WeakMap();
+  const remembered = (snapshot, key, make) => {
+    let entry = memo.get(snapshot);
+    if (!entry) memo.set(snapshot, entry = new Map());
+    if (!entry.has(key)) entry.set(key, make());
+    return entry.get(key);
+  };
+  const totalOf = (snapshot, params) => remembered(snapshot, "total " + params.toString(), () => projectShopCatalog(snapshot, params).pagination?.total);
+  const indexOf = snapshot => remembered(snapshot, "index", () => shopCollectionIndex(snapshot, SHOP_COLLECTION_CONFIG));
   async function serveManagedShopCollection(request, env) {
     const url = new URL(request.url);
     const snapshot = await readCommerceSnapshot(env);
@@ -1940,7 +2006,7 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
       return Response.redirect(new URL("/shop/" + (query ? "?" + new URLSearchParams([["q", query]]) : ""), url), 301);
     }
     if (snapshot?.enabled && ["/collections", "/collections/", "/collections/all", "/collections/all/"].includes(url.pathname)) return Response.redirect(new URL("/shop/"+url.search,url),301);
-    const match = resolveShopCollection(snapshot, url.pathname, SHOP_COLLECTION_CONFIG);
+    const match = resolveShopCollection(snapshot, url.pathname, SHOP_COLLECTION_CONFIG, snapshot ? indexOf(snapshot) : undefined);
     if (!match) return null;
     if (!snapshot?.enabled || !match.group) {
       // A page the website itself publishes at this address is served, not hidden behind an empty store category.
@@ -1970,7 +2036,7 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
     if (!response.ok || !String(response.headers.get("content-type") || "").includes("text/html") || typeof HTMLRewriter === "undefined") return response;
     const snapshot = await readCommerceSnapshot(env);
     if (!snapshot?.enabled) return response;
-    const index = shopCollectionIndex(snapshot, SHOP_COLLECTION_CONFIG);
+    const index = indexOf(snapshot);
     const resolve = path => resolveShopCollection(snapshot,path,SHOP_COLLECTION_CONFIG,index);
     const now = Date.now();
     const banners = (snapshot.storeBanners || []).map((banner,position)=>({...banner,position})).filter(banner=>banner.enabled && (!banner.startsAt || Date.parse(banner.startsAt)<=now) && (!banner.endsAt || Date.parse(banner.endsAt)>now)).slice(0,4);
@@ -1985,7 +2051,7 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
       const params = new URLSearchParams(filter);params.set("view","list");params.set("pageSize","1");
       params.set("category",group.kind === "category" ? group.categoryPath : "*");
       if(group.kind === "foc")params.set("cutoffDate",group.cutoffDate);
-      return projectShopCatalog(snapshot,params).pagination?.total > 0;
+      return totalOf(snapshot,params) > 0;
     }).map(group=>'<li><a class="nav-link" href="'+escapeStoreHtml(group.path+(filter?"?"+filter:""))+'">'+escapeStoreHtml(group.title+suffix)+'</a></li>').join("");
     const menu = kind => { const items = menuItems(kind); return items ? '<li class="nav-folder" data-ww-shop-collection-menu="'+kind+'"><details name="ww-nav-folders"><summary class="nav-link">'+(kind === "foc" ? "Preorders by FOC date" : "Shop categories")+'</summary><ul class="nav-submenu">'+items+'</ul></details></li>' : ""; };
     const rewritten = new HTMLRewriter()
@@ -2004,7 +2070,8 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
       // HTMLRewriter returns attribute values with their entities still encoded.
       const attribute = name => String(element.getAttribute(name) || "").replace(/&(amp|lt|gt|quot|#39|#x27);/g, (_, entity) => ({amp:"&",lt:"<",gt:">",quot:'"',"#39":"'","#x27":"'"})[entity]);
       const kind = attribute("data-ww-shop-collection-menu");
-      const filter = shopMenuFilter(snapshot, attribute("data-ww-menu-samples").split(/\s+/).filter(Boolean), attribute("data-ww-menu-contrast").split(/\s+/).filter(Boolean));
+      const samples = attribute("data-ww-menu-samples"), contrast = attribute("data-ww-menu-contrast");
+      const filter = remembered(snapshot, "filter " + samples + "\n" + contrast, () => shopMenuFilter(snapshot, samples.split(/\s+/).filter(Boolean), contrast.split(/\s+/).filter(Boolean)));
       const items = menuItems(kind, filter, attribute("data-ww-menu-item-suffix"));
       if (!items) { element.remove(); return; }
       const label = attribute("data-ww-menu-label") || (kind === "foc" ? "Preorders by FOC date" : "Shop categories");
@@ -2015,7 +2082,7 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
           const params = new URLSearchParams(url.search);params.set("view","list");params.set("pageSize","1");
           if(match?.group?.kind === "category")params.set("category",match.group.categoryPath);
           if(match?.group?.kind === "foc")params.set("cutoffDate",match.group.cutoffDate);
-          const total=projectShopCatalog(snapshot,params).pagination?.total;
+          const total=totalOf(snapshot,params);
           if(total===0){element.remove();return;}
         }
         if(["/collections/all/","/collections/all","/collections/","/collections"].includes(url.pathname)){element.setAttribute("href","/shop/"+url.search);return;}
@@ -2028,7 +2095,7 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
   async function commerceRoutes(env) {
     const routes = await legacycommerceRoutes(env);
     const snapshot = await readCommerceSnapshot(env);
-    const collections = shopCollectionIndex(snapshot, SHOP_COLLECTION_CONFIG).map(group => ({path:group.path,name:group.title,purpose:"Managed shop collection"}));
+    const collections = (snapshot ? indexOf(snapshot) : shopCollectionIndex(snapshot, SHOP_COLLECTION_CONFIG)).map(group => ({path:group.path,name:group.title,purpose:"Managed shop collection"}));
     return [...new Map([...routes, ...collections].map(route => [route.path,route])).values()];
   }
   async function addCommerceNavigation(response, env) {

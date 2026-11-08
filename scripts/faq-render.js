@@ -10,7 +10,8 @@ import { fillStencil, richText } from "./collection-render.js";
 
 // 2: the website draws a page of its own at /faq/ when the owner asks for one, and the menu button for it.
 // 3: a page that carried the same questions as another list is drawn from that list (aliases in the published file).
-export const FAQ_RENDER_VERSION = 3;
+// 4: the /faq/ page's own search title and description (page.title, page.description).
+export const FAQ_RENDER_VERSION = 4;
 export const MAX_FAQ_LISTS = 40;
 export const MAX_FAQ_ITEMS = 200;
 export const MAX_QUESTION = 200;

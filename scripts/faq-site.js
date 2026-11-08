@@ -16,10 +16,13 @@ export { FAQ_RENDER_VERSION };
 export const FAQ_PAGE_PATH = "/faq/";
 const line = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 const escape = (text) => String(text ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]);
+// The title and description search results show for the page are the owner's too (the heading when there is no title).
 export function faqPageSettings(input) {
   if (!input || typeof input !== "object") return null;
   const label = line(input.label, 40);
-  return label ? { label, nav: input.nav === "button" ? "button" : "none" } : null;
+  const title = line(input.title, 70);
+  const description = line(input.description, 300);
+  return label ? { label, nav: input.nav === "button" ? "button" : "none", ...(title ? { title } : {}), ...(description ? { description } : {}) } : null;
 }
 
 export function parseFaqs(text) {
@@ -82,12 +85,12 @@ export async function serveFaqPage(request, index, { shell, language = "en" } = 
   const home = shell ? await Promise.resolve().then(() => shell("/")).catch(() => null) : null;
   const fragment = renderFaqFragment(index, { language });
   if (home?.ok && (home.headers.get("content-type") || "").includes("text/html")) {
-    const composed = composeCollectionPage(home, fragment, { title: page.label, summary: "", origin: url.origin, canonical: `${url.origin}${FAQ_PAGE_PATH}` });
+    const composed = composeCollectionPage(home, fragment, { title: page.title || page.label, summary: page.description || "", origin: url.origin, canonical: `${url.origin}${FAQ_PAGE_PATH}` });
     composed.headers.set("x-ww-faq-page", "1");
     return request.method === "HEAD" ? new Response(null, composed) : composed;
   }
   await home?.body?.cancel?.();
-  return new Response(request.method === "HEAD" ? null : `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(page.label)}</title>${fragment.head}</head><body>${fragment.body}</body></html>`,
+  return new Response(request.method === "HEAD" ? null : `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(page.title || page.label)}</title>${page.description ? `<meta name="description" content="${escape(page.description)}">` : ""}${fragment.head}</head><body>${fragment.body}</body></html>`,
     { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 
