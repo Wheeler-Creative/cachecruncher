@@ -92,13 +92,20 @@ jobs:
       # Verification never rewrites anything: a red run here means a violation
       # that needs the platform's model repair or a person. It judges the
       # repaired files before anything is committed, so the verdict is on what
-      # would be deployed.
+      # would be deployed. Each page still blocking is written as an error
+      # annotation: the platform reads those to say what is wrong
+      # (src/sites/accessibility-gate-status.js) and then repairs it with the
+      # model (repair-site-accessibility.yml).
       - name: Scan accessibility defects
         env:
           A11Y_REPAIR: "false"
           A11Y_ENFORCE: ${{ vars.A11Y_ENFORCE }}
           A11Y_CHANGED_FROM: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'full' }}
-        run: node scripts/remediate-accessibility.mjs .
+        run: |
+          status=0
+          node scripts/remediate-accessibility.mjs . || status=$?
+          node -e 'try { const report = JSON.parse(require("fs").readFileSync(".site-accessibility.json", "utf8")); for (const page of (report.pages || []).filter((entry) => Number(entry.blockingCount || 0) > 0).slice(0, 8)) console.log(`::error title=Accessibility::${String(page.path || "/").slice(0, 120)}: ${Number(page.blockingCount)} blocking (${(page.ruleIds || []).slice(0, 8).join(", ")})`) } catch {}'
+          exit $status
 
       # A repair is kept only when the scan of the repaired files found nothing
       # blocking (this step runs only after a passing scan, and checks the
