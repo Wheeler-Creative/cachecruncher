@@ -180,9 +180,19 @@ jobs:
           # that serves photos from R2 answered 404 for all of them.
           PREVIEW_WORKER_NAME="$preview_name" node scripts/managed-site/preview-config.mjs
           npm run build --if-present
-          npx wrangler deploy --config wrangler.preview.generated.jsonc | tee deploy-output.txt
-          preview_url=$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' deploy-output.txt | tail -n 1)
-          test -n "$preview_url"
+          # A website in the platform's namespace (managed-site.json) has its preview there too, at <name>-site on
+          # jaybirdsites.com; a Worker of its own has a workers.dev preview, whose address wrangler prints.
+          set -o pipefail
+          hosting_args=""
+          if [ -f scripts/managed-site/hosting.mjs ]; then hosting_args=$(node scripts/managed-site/hosting.mjs wrangler-args); fi
+          # shellcheck disable=SC2086
+          npx wrangler deploy --config wrangler.preview.generated.jsonc $hosting_args | tee deploy-output.txt
+          if [ -n "$hosting_args" ]; then
+            preview_url=$(node scripts/managed-site/hosting.mjs address "$preview_name")
+          else
+            preview_url=$(grep -Eo 'https://[^[:space:]]+\.workers\.dev' deploy-output.txt | tail -n 1)
+          fi
+          test -n "$preview_url""
           echo "name=$preview_name" >> "$GITHUB_OUTPUT"
           echo "url=$preview_url" >> "$GITHUB_OUTPUT"
       - name: Install visual verification browser
@@ -225,8 +235,14 @@ jobs:
           PREVIEW_WORKER_NAME: ${{ steps.preview.outputs.name }}
         # --name, not a positional: the bare form makes wrangler enumerate
         # account resources the platform token cannot always read, which fails
-        # the step even though the worker was deleted.
-        run: npx wrangler delete --name "$PREVIEW_WORKER_NAME" --force
+        # the step even though the worker was deleted. A preview in the
+        # platform's namespace is deleted through the API, where it lives.
+        run: |
+          if [ -f scripts/managed-site/hosting.mjs ] && [ -n "$(node scripts/managed-site/hosting.mjs wrangler-args)" ]; then
+            node scripts/managed-site/delete-preview-worker.mjs
+          else
+            npx wrangler delete --name "$PREVIEW_WORKER_NAME" --force
+          fi
       - name: Mark failed
         if: ${{ failure() }}
         env:

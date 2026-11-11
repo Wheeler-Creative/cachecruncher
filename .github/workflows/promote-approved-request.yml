@@ -142,7 +142,12 @@ jobs:
           npm run build:data --if-present
           node scripts/managed-site/site-test-runner.mjs
           npx wrangler deploy --dry-run
-          npx wrangler deploy --keep-vars
+          # Into the platform's namespace when managed-site.json says the website lives there. On a line of its own,
+          # so a failure stops the step rather than deploying a Worker of its own.
+          hosting_args=""
+          if [ -f scripts/managed-site/hosting.mjs ]; then hosting_args=$(node scripts/managed-site/hosting.mjs wrangler-args); fi
+          # shellcheck disable=SC2086
+          npx wrangler deploy --keep-vars $hosting_args
       - name: Mark deployed
         env:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}

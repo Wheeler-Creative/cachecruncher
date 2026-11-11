@@ -288,11 +288,14 @@ export function jsonMediaReferences(value, known, into = new Set(), ownHosts = n
 }
 
 // Hosts that serve a site's own storage, read from the site's own files: the address its pages name as their own
-// (canonical and og:url links), its sitemap and robots.txt, the routes in its wrangler file, and workers.dev always.
-// `files` is [[path, text]] and may include the wrangler file. `extra` lists hosts the caller already knows. A www
-// address and its bare twin are one site. An absolute link on any other host (a supplier's cover) is not a stored key.
+// (canonical and og:url links), its sitemap and robots.txt, the routes in its wrangler file, and the platform addresses
+// always: workers.dev, and jaybirdsites.com where a namespace website answers at <script>-site. That pair is
+// isPlatformHost in src/sites/site-hosting.js; it is written out here because this file is copied alone into each
+// website's repository. `files` is [[path, text]] and may include the wrangler file. `extra` lists hosts the caller
+// already knows. A www address and its bare twin are one site. An absolute link on any other host (a supplier's cover)
+// is not a stored key.
 export function siteOwnHostsFromFiles(files = [], extra = []) {
-  const hosts = new Set(["*.workers.dev"]);
+  const hosts = new Set(["*.workers.dev", "*.jaybirdsites.com"]);
   const add = (value) => {
     const host = /^(?:https?:)?\/\/([^/?#\s"'<>]+)/i.exec(String(value || "").trim())?.[1]?.replace(/^[^@]*@/, "").replace(/:\d+$/, "").toLowerCase();
     if (!host) return;

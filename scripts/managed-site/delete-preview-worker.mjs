@@ -1,3 +1,5 @@
+import { scriptApiPath } from "./hosting.mjs";
+
 const workerName = String(process.env.PREVIEW_WORKER_NAME || "").trim();
 const token = String(process.env.CLOUDFLARE_API_TOKEN || "").trim();
 if (!workerName || !token) throw new Error("PREVIEW_WORKER_NAME and Cloudflare credentials are required");
@@ -18,8 +20,11 @@ async function accountOf() {
 }
 const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim() || await accountOf();
 if (!accountId) throw new Error("The Cloudflare account could not be found from the token; set CLOUDFLARE_ACCOUNT_ID");
+// A website in the platform's namespace has its previews there too (managed-site.json, scripts/managed-site/hosting.mjs);
+// a script there is deleted with force, as the platform's own cleanup does.
+const scriptPath = scriptApiPath(workerName);
 const response = await fetch(
-  `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/workers/scripts/${encodeURIComponent(workerName)}`,
+  `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}${scriptPath}${scriptPath.includes("/dispatch/") ? "?force=true" : ""}`,
   { method: "DELETE", headers: { authorization: `Bearer ${token}` } }
 );
 if (![200, 404].includes(response.status)) throw new Error(`Preview Worker deletion returned ${response.status}: ${(await response.text()).slice(0, 300)}`);

@@ -20,5 +20,9 @@
   ],
   "maxFiles": 8,
   "maxFileBytes": 80000,
-  "maxSourceBytes": 500000
+  "maxSourceBytes": 500000,
+  "hosting": {
+    "kind": "namespace",
+    "dispatchNamespace": "jaybird-sites-production"
+  }
 }

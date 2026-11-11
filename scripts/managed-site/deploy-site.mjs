@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { wranglerHostingArgs } from "./hosting.mjs";
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
@@ -39,7 +40,8 @@ export const PHASES = {
   },
   deploy: () => {
     run(npm, ["run", "build", "--if-present"]);
-    run(npx, ["wrangler", "deploy", "--keep-vars"]);
+    // Into the platform's namespace when managed-site.json says the website lives there; otherwise its own Worker.
+    run(npx, ["wrangler", "deploy", "--keep-vars", ...wranglerHostingArgs()]);
     // Which media the deployed site links to, so a picture it still uses is never deleted.
     if (existsSync("scripts/managed-site/media-links.mjs")) run(process.execPath, ["scripts/managed-site/media-links.mjs", "--publish"]);
   },

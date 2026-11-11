@@ -1064,13 +1064,16 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
         }
         // A phone is sent the width it shows (owner, 2026-11-07: speed where it makes an impact). Google's phone test
         // found Halt the Hate's emblem sent 1080 pixels wide for a 579-pixel box, its main content half a second late.
-        // The browser takes the smallest width that fills the box: a lazy picture by its laid-out width (auto), the
-        // rest by the screen's. A page's own srcset is left alone, and its own sizes is kept.
+        // The browser takes the smallest width that fills the screen. A page's own srcset is left alone, and its own
+        // sizes is kept.
+        // Never sizes="auto": a browser gives such a picture a fixed 300x150 size of its own (contain: size) wherever
+        // the page's stylesheet does not keep its shape, so a stylesheet's `aspect-ratio: auto` drew Buse Babadag's
+        // portrait Nutcracker picture 150 pixels tall (owner, 2026-11-11: "got smooshed"; live since 2026-11-08).
         if (element.getAttribute("srcset") === null) {
           const srcset = responsiveSrcset(element.getAttribute("src"), known.w);
           if (srcset) {
             element.setAttribute("srcset", srcset);
-            if (element.getAttribute("sizes") === null) element.setAttribute("sizes", element.getAttribute("loading") === "lazy" ? "auto, 100vw" : "100vw");
+            if (element.getAttribute("sizes") === null) element.setAttribute("sizes", "100vw");
           }
         }
         // aspect-ratio reserves the space without distorting a photo the stylesheet sizes by one side only.

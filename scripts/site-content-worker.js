@@ -322,6 +322,7 @@ export function advertiseRules(response, env) {
     marked.headers.set("x-ww-dated", String(DATED_RENDER_VERSION));
     marked.headers.set("x-ww-signups", String(SIGNUPS_RENDER_VERSION));
     marked.headers.set("x-ww-credit", String(CREDIT_RENDER_VERSION));
+    marked.headers.set("x-ww-tags", String(TAGS_RENDER_VERSION));
     if (env?.CUSTOMER_ACCOUNT_ACTOR_RATE && env?.CUSTOMER_ACCOUNT_SITE_RATE) marked.headers.set("x-ww-customer-accounts", String(CUSTOMER_RUNTIME_VERSION));
     return marked;
   } catch {
@@ -350,15 +351,18 @@ export const SITE_PERMISSIONS_POLICY = 'camera=(), microphone=(), geolocation=(s
 // reports are clean: site-integrations/<id>/security.json with { "version": 1, "siteId": "<id>", "csp": "enforce" }
 // (or "off" to send nothing). Without that file a website is in "report".
 export const POLICY_REPORT_SAMPLE = 0.1;
-export function sitePolicy({ siteId, platformOrigin = "https://jaybirddigital.com" } = {}) {
+// `extra`: the sources the website's managed tags need ({ "script-src": [...], "connect-src": [...] }, from tags.json).
+// Each is checked against TAG_SOURCE here, whoever wrote the file; the other directives already allow any https.
+export function sitePolicy({ siteId, platformOrigin = "https://jaybirddigital.com", extra = null } = {}) {
+  const more = (directive) => tagSources(extra, directive).map((source) => ` ${source}`).join("");
   return [
     "default-src 'self'",
-    "script-src 'self' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://static.cloudflareinsights.com",
+    `script-src 'self' https://challenges.cloudflare.com https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.recaptcha.net https://js.stripe.com https://*.js.stripe.com https://checkout.stripe.com https://static.cloudflareinsights.com${more("script-src")}`,
     "style-src 'self' 'unsafe-inline' https:",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data: https:",
     "media-src 'self' data: blob: https:",
-    `connect-src 'self' ${platformOrigin} https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://cloudflareinsights.com`,
+    `connect-src 'self' ${platformOrigin} https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://cloudflareinsights.com${more("connect-src")}`,
     "frame-src 'self' https:",
     "object-src 'self'",
     "base-uri 'self'",
@@ -367,6 +371,56 @@ export function sitePolicy({ siteId, platformOrigin = "https://jaybirddigital.co
     `report-uri ${platformOrigin}/api/csp-report?site=${encodeURIComponent(siteId || "")}`
   ].join("; ");
 }
+// MANAGED TAGS (src/integrations/tags.js writes site-integrations/<id>/tags.json): the analytics, ad and chat scripts the
+// owner turned on, as one script served at /_ww/tags.js and added to every page. Never on a preview Worker
+// (<name>-request-<id8>), in the editor's view of a page, or on a page the platform reads as written, so the owner's
+// numbers count only real visits. TAG_SOURCE is the library's own (src/integrations/define.js), written out because this
+// module must not import it; scripts/site-security-headers.test.mjs keeps the two the same.
+// 1: first version (2026-11-10).
+export const TAGS_RENDER_VERSION = 1;
+export const TAGS_PATH = "/_ww/tags.js";
+export const TAG_SOURCE = /^(?:https|wss):\/\/(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[A-Za-z0-9._~\/-]*)?$/;
+const TAG_POLICY_DIRECTIVES = ["script-src", "connect-src"];
+function tagSources(extra, directive) {
+  if (!TAG_POLICY_DIRECTIVES.includes(directive) || !Array.isArray(extra?.[directive])) return [];
+  return extra[directive].filter((source) => typeof source === "string" && source.length <= 200 && TAG_SOURCE.test(source)
+    && (directive === "connect-src" || !source.startsWith("wss:"))).slice(0, 40);
+}
+export function parseTags(text, siteId) {
+  try {
+    const value = JSON.parse(text || "null");
+    if (value?.version !== 1 || value.siteId !== siteId || typeof value.script !== "string" || !value.script) return null;
+    if (value.script.length > 64 * 1024 || !/^[a-f0-9]{8,64}$/.test(String(value.hash || ""))) return null;
+    const sources = {};
+    for (const directive of TAG_POLICY_DIRECTIVES) sources[directive] = tagSources(value.sources, directive);
+    return { script: value.script, hash: value.hash, sources };
+  } catch { return null; }
+}
+export function previewWorkerHost(request) {
+  try { return /-request-[0-9a-f]{8}\./i.test(new URL(request.url).hostname); } catch { return false; }
+}
+// /_ww/tags.js. Answered (404 with no tags) so the platform can read which runtime a website runs from its headers.
+export function tagsAsset(request, tags) {
+  const url = new URL(request.url);
+  if (url.pathname !== TAGS_PATH || !["GET", "HEAD"].includes(request.method)) return null;
+  const headers = { "x-ww-tags": String(TAGS_RENDER_VERSION), "x-content-type-options": "nosniff" };
+  if (!tags || previewWorkerHost(request)) return new Response("", { status: 404, headers: { ...headers, "cache-control": "no-store" } });
+  // The page asks for ?v=<hash>, so a changed list is a new address and the old one can be kept for a long time.
+  const versioned = url.searchParams.get("v") === tags.hash;
+  return new Response(request.method === "HEAD" ? null : tags.script, { headers: { ...headers, "x-ww-tags-hash": tags.hash,
+    "content-type": "text/javascript; charset=utf-8", "cache-control": versioned ? "public, max-age=31536000, immutable" : "public, max-age=60" } });
+}
+export function addTags(response, tags) {
+  if (!tags || typeof HTMLRewriter === "undefined") return response;
+  if (!response?.ok || !String(response.headers?.get?.("content-type") || "").includes("text/html")) return response;
+  let placed = false;
+  return new HTMLRewriter().on("head", { element(element) {
+    if (placed) return;
+    placed = true;
+    element.append(`<script src="${TAGS_PATH}?v=${tags.hash}" async></script>`, { html: true });
+  } }).transform(response);
+}
+
 export function securitySettings(text, siteId) {
   try {
     const value = JSON.parse(text || "{}");
@@ -446,6 +500,13 @@ export function withSiteContent(handler, options = {}) {
   const readNewsletter = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/newsletter.json` : "" });
   const readSecurity = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/security.json` : "" });
   const readPageDates = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/page-dates.json` : "" });
+  const readTags = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/tags.json` : "" });
+  let tagsMemo = { text: null, tags: null };
+  const tagsFor = async (env) => {
+    const text = siteId ? await readTags(env).catch(() => "") : "";
+    if (text !== tagsMemo.text) tagsMemo = { text, tags: parseTags(text, siteId) };
+    return tagsMemo.tags;
+  };
   const pdfMatches = new Map();
   // The blog and repeating pages: a small index read on every page (for the menu), each list's own file on its pages.
   const readCollections = siteContentReader({ ...options, key: siteId ? `site-integrations/${siteId}/collections.json` : "" });
@@ -513,7 +574,8 @@ export function withSiteContent(handler, options = {}) {
     async fetch(request, env, ctx) {
       const response = await serve(request, env, ctx);
       const security = siteId ? securitySettings(await readSecurity(env).catch(() => null), siteId) : { csp: "off" };
-      return withSiteSecurityHeaders(response, { siteId, platformOrigin: env?.PORTAL_ORIGIN || "https://jaybirddigital.com", security });
+      const tags = siteId ? await tagsFor(env).catch(() => null) : null;
+      return withSiteSecurityHeaders(response, { siteId, platformOrigin: env?.PORTAL_ORIGIN || "https://jaybirddigital.com", security, extra: tags?.sources });
     }
   };
   async function serve(request, env, ctx) {
@@ -521,10 +583,14 @@ export function withSiteContent(handler, options = {}) {
       // A request reads up to a dozen small snapshots below, each one when its turn comes. On a quiet website, where the
       // 20-second cache has run out, that was 1-2 seconds before the first byte of every page (Career Hunter,
       // 2026-10-23). They are read together first, so the turns below find them cached: one read's wait, not twelve.
-      if (siteId) await Promise.all([read, readAccounts, readScheduler, readNewsletter, readWebApp, readPopups, readFaqs, readSignups, readCollections, readEvents, readImages, readSecurity]
+      if (siteId) await Promise.all([read, readAccounts, readScheduler, readNewsletter, readWebApp, readPopups, readFaqs, readSignups, readCollections, readEvents, readImages, readSecurity, readTags]
         .map((reader) => reader(env).catch(() => null)));
       // The platform's records beside a site's pictures (meta/media-usage.json and the build's folders) are not served.
       if (internalMediaRequest(request)) return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
+      if (siteId && new URL(request.url).pathname === TAGS_PATH) {
+        const asset = tagsAsset(request, await tagsFor(env).catch(() => null));
+        if (asset) return asset;
+      }
       // Booking channels call the property at its own address; the platform answers (src/site-customer-runtime.js).
       if (siteId) {
         const partner = await partnerApiRoute(request, env, { siteId, platformOrigin: env.PORTAL_ORIGIN || 'https://jaybirddigital.com' });
@@ -679,6 +745,12 @@ export function withSiteContent(handler, options = {}) {
             formCheck: typeof options.formCheck === "function" ? String(options.formCheck(env || {}, signupLanguage || options.language || "en") || "") : ""
           });
         } catch { /* the page without the drawn form */ }
+      }
+      // The owner's managed tags, on real page views only.
+      if (siteId && !asWritten && !preview.highlight && !previewWorkerHost(request)) {
+        try {
+          response = addTags(response, await tagsFor(env));
+        } catch { /* the page without its tags */ }
       }
       let content = await read(env);
       const pathname = new URL(request.url).pathname;
