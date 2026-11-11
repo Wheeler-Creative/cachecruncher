@@ -7,8 +7,9 @@
 # The platform build/edit agent performs model repairs with platform credentials
 # before publication. This workflow is the backstop for everything else (a hand
 # edit, an older migration, a rule the platform agent has since learned): on a
-# push to main it applies the deterministic, key-free repairs, commits them,
-# redeploys, and then verifies. A pull request is only scanned.
+# push to main it applies the deterministic, key-free repairs, verifies the
+# repaired files, and commits and redeploys them only when that scan passes.
+# A pull request is only scanned.
 name: Accessibility gate
 
 on:
@@ -85,31 +86,51 @@ jobs:
         run: |
           node scripts/remediate-accessibility.mjs .
           if [[ -n "$(git status --porcelain -- public layout)" ]]; then
-            git config user.name "wheelers-websites-bot"
-            git config user.email "actions@users.noreply.github.com"
-            git add -- public layout
-            git commit -m "Repair accessibility violations"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
             echo "repaired=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # A push made with the workflow token starts no other workflow, so the
-      # repaired site is deployed explicitly.
-      - name: Deploy the repaired site
-        if: ${{ steps.repair.outputs.repaired == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run deploy-manual-change.yml --ref "${GITHUB_REF_NAME}" || echo "::warning::The repairs were committed but the deploy could not be started; run Deploy manual website change."
-
       # Verification never rewrites anything: a red run here means a violation
-      # that needs the platform's model repair or a person.
+      # that needs the platform's model repair or a person. It judges the
+      # repaired files before anything is committed, so the verdict is on what
+      # would be deployed.
       - name: Scan accessibility defects
         env:
           A11Y_REPAIR: "false"
           A11Y_ENFORCE: ${{ vars.A11Y_ENFORCE }}
           A11Y_CHANGED_FROM: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'full' }}
         run: node scripts/remediate-accessibility.mjs .
+
+      # A repair is kept only when the scan of the repaired files found nothing
+      # blocking (this step runs only after a passing scan, and checks the
+      # report too, so A11Y_ENFORCE=false cannot let an unproven repair
+      # through). A repair that leaves a page failing is discarded with the
+      # runner: on Nov 11 2026 a partial repair lightened Larkfield Bike
+      # Repair's text on every page and was committed and deployed three times
+      # while the scan after it failed.
+      - name: Keep the verified repair
+        id: keep
+        if: ${{ steps.repair.outputs.repaired == 'true' }}
+        run: |
+          blocking=$(node -e 'try { console.log(Number(JSON.parse(require("fs").readFileSync(".site-accessibility.json", "utf8")).blockingCount)) } catch { console.log("unknown") }')
+          if [[ "$blocking" != "0" ]]; then
+            echo "::warning::The repair left ${blocking} blocking violation(s), so it was not kept or deployed."
+            exit 0
+          fi
+          git config user.name "wheelers-websites-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -- public layout
+          git commit -m "Repair accessibility violations"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "kept=true" >> "$GITHUB_OUTPUT"
+
+      # A push made with the workflow token starts no other workflow, so the
+      # repaired site is deployed explicitly.
+      - name: Deploy the repaired site
+        if: ${{ steps.keep.outputs.kept == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-manual-change.yml --ref "${GITHUB_REF_NAME}" || echo "::warning::The repairs were committed but the deploy could not be started; run Deploy manual website change."
       - name: Publish accessibility repair details
         if: ${{ always() && github.event_name == 'pull_request' }}
         uses: actions/github-script@v7

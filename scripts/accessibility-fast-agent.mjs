@@ -194,6 +194,19 @@ function linkSelector(target) {
   return selector;
 }
 
+// axe names some elements only by their editor label (a[data-ww-label="Menu button: Send an enquiry"]), which
+// repeats across unrelated elements, so specificEnough drops the rule and the failure is never repaired. The
+// element's own edit id (data-ww-edit) is unique to it, the shared header and footer included: name that instead.
+// Larkfield Bike Repair, Nov 11 2026: the header button's dark-on-blue text was left failing on every page.
+function placedTarget(selector, html) {
+  if (specificEnough(selector)) return selector;
+  const source = String(html || "").trim();
+  const edit = /^<[^>]*\bdata-ww-edit="([\w:.-]{1,120})"/i.exec(source)?.[1];
+  if (!edit) return selector;
+  const tag = /^<([a-z][a-z0-9-]*)/i.exec(source)?.[1]?.toLowerCase() || "";
+  return `${tag}[data-ww-edit="${edit}"]`;
+}
+
 // Rules are written against the colour the browser measured, so they work when
 // a theme computes its colours (rgba(var(--color-foreground), .75)) and no
 // literal value exists in any stylesheet to replace.
@@ -218,7 +231,8 @@ function contrastRules(violations) {
         }
         continue;
       }
-      const exact = targetText(node.colourTarget || node.scopedTarget || node.target);
+      const measured = targetText(node.colourTarget || node.scopedTarget || node.target);
+      const exact = node.colourTarget || node.scopedTarget ? measured : placedTarget(measured, node.html);
       if (node.colourRule && !node.colourTarget) {
         if (reachesWholeClass(node.colourRule)) continue;
         rules.push({ selector: node.colourRule, exact: node.colourRule, declaration: `color: ${color}`, sourceRule: true });
@@ -335,6 +349,21 @@ async function primaryStylesheet(publicDir) {
   return cssFiles.find((file) => path.basename(file) === "styles.css") || cssFiles[0] || null;
 }
 
+// The page's own background: the :root canvas/page/background token, else the body's fill, else white.
+function pageBackground(css) {
+  const roots = [...String(css).matchAll(/:root\s*\{([^}]*)\}/gi)].map((match) => match[1]).join(";");
+  const token = /--[\w-]*(?:canvas|page|paper|bg|background)[\w-]*\s*:\s*(#[0-9a-f]{3,8}|rgba?\([^)]*\))/i.exec(roots);
+  const body = /(?:^|[}\s,])(?:html|body)\s*\{[^}]*?background(?:-color)?\s*:\s*(#[0-9a-f]{3,8}|rgba?\([^)]*\))/i.exec(String(css));
+  return parseColor(token?.[1] || "") || parseColor(body?.[1] || "") || parseColor("#ffffff");
+}
+
+// A text colour written once and used everywhere (a theme token or a literal) may only be changed where it is
+// written when the new colour still reads on the page itself. Ink that failed on a dark band is otherwise
+// lightened for every page (Nov 11: Larkfield Bike Repair's --color-ink went #172338 -> #d9dce1 on #f7f9fc).
+function readsOnPage(colour, css) {
+  return contrastRatio(colour, pageBackground(css)) >= 4.5;
+}
+
 export async function resolveCssContrastIssues(publicDir, violations = []) {
   const contrastFailures = extractContrastFailures(violations);
   const changes = [];
@@ -418,6 +447,9 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
           }
           continue;
         }
+
+        // Not readable on the page itself: leave the shared value and override the measured element below.
+        if (!readsOnPage(better, css)) continue;
 
         // Search for matches in CSS for the hex or 3-digit shorthand
         const candidates = [
