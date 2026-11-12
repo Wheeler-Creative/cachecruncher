@@ -12,7 +12,7 @@
           <h2 data-ww-edit="home-calcform-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Cache Parameters">Cache Parameters</h2>
 
           <div class="field with-unit">
-            <label for="cache_size">Cache Size</label>
+            <label data-ww-edit="home-calcform-label" data-ww-kind="text" data-ww-label="Label" data-ww-group="Cache Parameters" for="cache_size">Cache Size</label>
             <div class="row">
               <input type="number" step="any" min="0" id="cache_size" name="cache_size" placeholder="e.g. 32">
               <select id="cache_unit" name="cache_unit" aria-label="Cache size unit">
@@ -25,36 +25,36 @@
           </div>
 
           <div class="field">
-            <label for="block_size">Block Size (Bytes)</label>
+            <label data-ww-edit="home-calcform-label-2" data-ww-kind="text" data-ww-label="Label 2" data-ww-group="Cache Parameters" for="block_size">Block Size (Bytes)</label>
             <input type="number" min="1" step="1" id="block_size" name="block_size" placeholder="e.g. 64">
           </div>
 
           <div class="field">
-            <label for="num_blocks">Number of Blocks</label>
+            <label data-ww-edit="home-calcform-label-3" data-ww-kind="text" data-ww-label="Label 3" data-ww-group="Cache Parameters" for="num_blocks">Number of Blocks</label>
             <input type="number" min="1" step="1" id="num_blocks" name="num_blocks" placeholder="leave blank to derive">
           </div>
 
           <div class="field">
-            <label for="associativity">Associativity</label>
+            <label data-ww-edit="home-calcform-label-4" data-ww-kind="text" data-ww-label="Label 4" data-ww-group="Cache Parameters" for="associativity">Associativity</label>
             <input type="number" min="1" step="1" id="associativity" name="associativity" placeholder="1 = direct-mapped">
           </div>
 
           <div class="field">
-            <label for="num_sets">Number of Sets</label>
+            <label data-ww-edit="home-calcform-label-5" data-ww-kind="text" data-ww-label="Label 5" data-ww-group="Cache Parameters" for="num_sets">Number of Sets</label>
             <input type="number" min="1" step="1" id="num_sets" name="num_sets" placeholder="leave blank to derive">
           </div>
 
           <div class="three">
             <div class="field">
-              <label for="index_bits">Index Bits</label>
+              <label data-ww-edit="home-calcform-label-6" data-ww-kind="text" data-ww-label="Label 6" data-ww-group="Cache Parameters" for="index_bits">Index Bits</label>
               <input type="number" min="0" step="1" id="index_bits" name="index_bits" placeholder="">
             </div>
             <div class="field">
-              <label for="tag_bits">Tag Bits</label>
+              <label data-ww-edit="home-calcform-label-7" data-ww-kind="text" data-ww-label="Label 7" data-ww-group="Cache Parameters" for="tag_bits">Tag Bits</label>
               <input type="number" min="0" step="1" id="tag_bits" name="tag_bits" placeholder="">
             </div>
             <div class="field">
-              <label for="offset_bits">Offset Bits</label>
+              <label data-ww-edit="home-calcform-label-8" data-ww-kind="text" data-ww-label="Label 8" data-ww-group="Cache Parameters" for="offset_bits">Offset Bits</label>
               <input type="number" min="0" step="1" id="offset_bits" name="offset_bits" placeholder="">
             </div>
           </div>
@@ -65,12 +65,12 @@
           <h2 data-ww-edit="home-calcform-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="Cache Parameters">Memory &amp; Virtual Memory</h2>
 
           <div class="field">
-            <label for="address_size">Physical Address Space (bits)</label>
+            <label data-ww-edit="home-calcform-label-9" data-ww-kind="text" data-ww-label="Label 9" data-ww-group="Cache Parameters" for="address_size">Physical Address Space (bits)</label>
             <input type="number" min="1" step="1" id="address_size" name="address_size" placeholder="e.g. 32">
           </div>
 
           <div class="field with-unit">
-            <label for="addressable_memory">Physical Memory</label>
+            <label data-ww-edit="home-calcform-label-10" data-ww-kind="text" data-ww-label="Label 10" data-ww-group="Cache Parameters" for="addressable_memory">Physical Memory</label>
             <div class="row">
               <input type="number" step="any" min="0" id="addressable_memory" name="addressable_memory" placeholder="">
               <select id="addr_mem_unit" name="addr_mem_unit" aria-label="Addressable memory unit">
@@ -83,12 +83,12 @@
           </div>
 
           <div class="field">
-            <label for="virtual_address_size">Virtual Address Space (bits)</label>
+            <label data-ww-edit="home-calcform-label-11" data-ww-kind="text" data-ww-label="Label 11" data-ww-group="Cache Parameters" for="virtual_address_size">Virtual Address Space (bits)</label>
             <input type="number" min="1" step="1" id="virtual_address_size" name="virtual_address_size" placeholder="">
           </div>
 
           <div class="field with-unit">
-            <label for="virtual_memory">Virtual Memory</label>
+            <label data-ww-edit="home-calcform-label-12" data-ww-kind="text" data-ww-label="Label 12" data-ww-group="Cache Parameters" for="virtual_memory">Virtual Memory</label>
             <div class="row">
               <input type="number" step="any" min="0" id="virtual_memory" name="virtual_memory" placeholder="">
               <select id="virt_mem_unit" name="virt_mem_unit" aria-label="Virtual memory unit">
@@ -101,7 +101,7 @@
           </div>
 
           <div class="field with-unit">
-            <label for="pagesize">Page Size</label>
+            <label data-ww-edit="home-calcform-label-13" data-ww-kind="text" data-ww-label="Label 13" data-ww-group="Cache Parameters" for="pagesize">Page Size</label>
             <div class="row">
               <input type="number" step="any" min="0" id="pagesize" name="pagesize" placeholder="e.g. 4">
               <select id="page_unit" name="page_unit" aria-label="Page size unit">
@@ -115,16 +115,16 @@
 
           <div class="three">
             <div class="field">
-              <label for="tlb_rows">TLB Rows</label>
+              <label data-ww-edit="home-calcform-label-14" data-ww-kind="text" data-ww-label="Label 14" data-ww-group="Cache Parameters" for="tlb_rows">TLB Rows</label>
               <input type="number" min="1" step="1" id="tlb_rows" name="tlb_rows" placeholder="">
             </div>
             <div class="field">
-              <label for="protection_bits">Protection Bits</label>
+              <label data-ww-edit="home-calcform-label-15" data-ww-kind="text" data-ww-label="Label 15" data-ww-group="Cache Parameters" for="protection_bits">Protection Bits</label>
               <input type="number" min="0" step="1" id="protection_bits" name="protection_bits" placeholder="">
             </div>
             <div class="field">
               <label>&nbsp;</label>
-              <button id="clearBtn" type="button" class="ghost full">Clear</button>
+              <button data-ww-edit="home-calcform-button" data-ww-kind="text" data-ww-label="Button text" data-ww-group="Cache Parameters" id="clearBtn" type="button" class="ghost full">Clear</button>
             </div>
           </div>
         </section>
@@ -151,48 +151,48 @@
           <h2 data-ww-edit="home-cache-simulator-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Cache Simulator">Cache Simulator</h2>
           <p data-ww-edit="home-cache-simulator-text" data-ww-kind="multiline" data-ww-label="Paragraph" data-ww-group="Cache Simulator" class="simulator-copy">Step through addresses and keep the main view focused on translation, cache state, and TLB activity. Extra memory views stay tucked into a compact reference area.</p>
         </div>
-        <div class="simulator-status" id="simStatus">Configure a valid cache geometry to start the simulator.</div>
+        <div data-ww-edit="home-cache-simulator-block" data-ww-kind="text" data-ww-label="Text" data-ww-group="Cache Simulator" class="simulator-status" id="simStatus">Configure a valid cache geometry to start the simulator.</div>
       </div>
 
       <div class="simulator-toolbar">
         <label class="field simulator-address-field" for="simAddress">
-          <span>Address (hex or decimal)</span>
+          <span data-ww-edit="home-cache-simulator-inline" data-ww-kind="text" data-ww-label="Text" data-ww-group="Cache Simulator">Address (hex or decimal)</span>
           <input type="text" id="simAddress" placeholder="e.g. 0x3F or 63" inputmode="text">
         </label>
         <label class="field simulator-mode-field" for="simAddressType">
-          <span>Address Space</span>
+          <span data-ww-edit="home-cache-simulator-inline-2" data-ww-kind="text" data-ww-label="Text 2" data-ww-group="Cache Simulator">Address Space</span>
           <select id="simAddressType">
             <option value="physical">Physical Address</option>
             <option value="virtual">Virtual Address</option>
           </select>
         </label>
         <label class="field simulator-mode-field" for="simOperation">
-          <span>Operation</span>
+          <span data-ww-edit="home-cache-simulator-inline-3" data-ww-kind="text" data-ww-label="Text 3" data-ww-group="Cache Simulator">Operation</span>
           <select id="simOperation">
             <option value="read">Read</option>
             <option value="write">Write</option>
           </select>
         </label>
-        <button type="button" id="simAddBtn">Access Address</button>
-        <button type="button" id="simRandomBtn" class="ghost">Random</button>
-        <button type="button" id="simResetBtn" class="ghost">Reset Trace</button>
+        <button data-ww-edit="home-cache-simulator-button" data-ww-kind="text" data-ww-label="Button text" data-ww-group="Cache Simulator" type="button" id="simAddBtn">Access Address</button>
+        <button data-ww-edit="home-cache-simulator-button-2" data-ww-kind="text" data-ww-label="Button text 2" data-ww-group="Cache Simulator" type="button" id="simRandomBtn" class="ghost">Random</button>
+        <button data-ww-edit="home-cache-simulator-button-3" data-ww-kind="text" data-ww-label="Button text 3" data-ww-group="Cache Simulator" type="button" id="simResetBtn" class="ghost">Reset Trace</button>
       </div>
 
       <div class="simulator-panels simulator-summary-panels">
         <section class="sim-panel">
           <h3 data-ww-edit="home-cache-simulator-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="Cache Simulator">Address Translation</h3>
-          <div id="simTranslation" class="bit-breakdown empty-state">No address translation yet.</div>
+          <div data-ww-edit="home-cache-simulator-block-2" data-ww-kind="text" data-ww-label="Text 2" data-ww-group="Cache Simulator" id="simTranslation" class="bit-breakdown empty-state">No address translation yet.</div>
         </section>
 
         <section class="sim-panel">
           <h3 data-ww-edit="home-cache-simulator-heading-3" data-ww-kind="text" data-ww-label="Heading 3" data-ww-group="Cache Simulator">Instruction Breakdown</h3>
-          <div id="simBreakdown" class="bit-breakdown empty-state">No access yet.</div>
+          <div data-ww-edit="home-cache-simulator-block-3" data-ww-kind="text" data-ww-label="Text 3" data-ww-group="Cache Simulator" id="simBreakdown" class="bit-breakdown empty-state">No access yet.</div>
         </section>
       </div>
 
       <section class="sim-panel sim-chain-panel">
         <h3 data-ww-edit="home-cache-simulator-heading-4" data-ww-kind="text" data-ww-label="Heading 4" data-ww-group="Cache Simulator">Address Chain</h3>
-        <div id="simChain" class="address-chain empty-state">No access yet.</div>
+        <div data-ww-edit="home-cache-simulator-block-4" data-ww-kind="text" data-ww-label="Text 4" data-ww-group="Cache Simulator" id="simChain" class="address-chain empty-state">No access yet.</div>
       </section>
 
       <section class="sim-panel sim-trace-panel">
@@ -203,26 +203,26 @@
       <div class="simulator-panels simulator-primary-panels">
         <section class="sim-panel">
           <h3 data-ww-edit="home-cache-simulator-heading-6" data-ww-kind="text" data-ww-label="Heading 6" data-ww-group="Cache Simulator">Cache Table</h3>
-          <div id="simCacheTable" class="table-shell empty-state">Cache table will appear here.</div>
+          <div data-ww-edit="home-cache-simulator-block-5" data-ww-kind="text" data-ww-label="Text 5" data-ww-group="Cache Simulator" id="simCacheTable" class="table-shell empty-state">Cache table will appear here.</div>
         </section>
 
         <section class="sim-panel">
           <h3 data-ww-edit="home-cache-simulator-heading-7" data-ww-kind="text" data-ww-label="Heading 7" data-ww-group="Cache Simulator">TLB Table</h3>
-          <div id="simTlbTable" class="table-shell empty-state">TLB activity will appear here.</div>
+          <div data-ww-edit="home-cache-simulator-block-6" data-ww-kind="text" data-ww-label="Text 6" data-ww-group="Cache Simulator" id="simTlbTable" class="table-shell empty-state">TLB activity will appear here.</div>
         </section>
       </div>
 
       <details class="simulator-reference">
-        <summary>Page Table and Memory Blocks</summary>
+        <summary data-ww-edit="home-cache-simulator-label" data-ww-kind="text" data-ww-label="Label" data-ww-group="Cache Simulator">Page Table and Memory Blocks</summary>
         <div class="simulator-panels simulator-reference-panels">
           <section class="sim-panel">
             <h3 data-ww-edit="home-cache-simulator-heading-8" data-ww-kind="text" data-ww-label="Heading 8" data-ww-group="Cache Simulator">Page Table</h3>
-            <div id="simPageTable" class="table-shell empty-state">Page table rows will appear here.</div>
+            <div data-ww-edit="home-cache-simulator-block-7" data-ww-kind="text" data-ww-label="Text 7" data-ww-group="Cache Simulator" id="simPageTable" class="table-shell empty-state">Page table rows will appear here.</div>
           </section>
 
           <section class="sim-panel">
             <h3 data-ww-edit="home-cache-simulator-heading-9" data-ww-kind="text" data-ww-label="Heading 9" data-ww-group="Cache Simulator">Memory Blocks</h3>
-            <div id="simMemoryTable" class="table-shell empty-state">Memory blocks will appear here.</div>
+            <div data-ww-edit="home-cache-simulator-block-8" data-ww-kind="text" data-ww-label="Text 8" data-ww-group="Cache Simulator" id="simMemoryTable" class="table-shell empty-state">Memory blocks will appear here.</div>
           </section>
         </div>
       </details>
@@ -236,14 +236,14 @@
         <button type="button" class="feedback-btn" data-feedback="death" aria-label="Death">💀</button>
       </div>
       <div class="support-buttons">
-        <a class="small-btn github-sponsor-btn" href="https://github.com/sponsors/itswheeler" target="_blank" rel="noopener">GitHub Sponsor</a>
-        <a class="small-btn bmc-btn" href="https://www.buymeacoffee.com/itswheeler" target="_blank" rel="noopener">Buy Me a Coffee</a>
+        <a data-ww-edit="home-how-was-this-tool-link" data-ww-kind="text" data-ww-label="Link text" data-ww-group="How was this tool?" class="small-btn github-sponsor-btn" href="https://github.com/sponsors/itswheeler" target="_blank" rel="noopener">GitHub Sponsor</a>
+        <a data-ww-edit="home-how-was-this-tool-link-2" data-ww-kind="text" data-ww-label="Link text 2" data-ww-group="How was this tool?" class="small-btn bmc-btn" href="https://www.buymeacoffee.com/itswheeler" target="_blank" rel="noopener">Buy Me a Coffee</a>
       </div>
       <div class="feedback-summary" id="feedbackSummary" aria-live="polite"></div>
     </section>
 
     <details data-ww-block="home-formulas" class="formulas">
-      <summary>Formulas used</summary>
+      <summary data-ww-edit="home-formulas-label" data-ww-kind="text" data-ww-label="Label" data-ww-group="Formulas">Formulas used</summary>
       <ul>
         <li><code>num_blocks = cache_size / block_size</code></li>
         <li><code>num_sets = num_blocks / associativity</code></li>
@@ -266,27 +266,27 @@
     <article data-ww-block="home-seo-content" class="seo-content">
       <h2 data-ww-edit="home-seo-content-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="About the Cache Cruncher Cache Simulator">About the Cache Cruncher Cache Simulator</h2>
       <p>
-        Cache Cruncher is a free online <strong>Cache Simulator and Memory Simulator</strong>
+        Cache Cruncher is a free online <strong data-ww-edit="home-seo-content-inline" data-ww-kind="text" data-ww-label="Text" data-ww-group="About the Cache Cruncher Cache Simulator">Cache Simulator and Memory Simulator</strong>
         designed for students taking computer architecture or computer organization
         courses. Type any combination of values you already know — cache size,
         block size, associativity, address width, page size, TLB rows — and every
         derived field fills in automatically. Because the solver is bidirectional,
-        you can drive it from <em>either</em> side of an equation: edit
+        you can drive it from <em data-ww-edit="home-seo-content-inline-2" data-ww-kind="text" data-ww-label="Text 2" data-ww-group="About the Cache Cruncher Cache Simulator">either</em> side of an equation: edit
         <code>num_blocks</code> and <code>cache_size</code> recomputes; edit
         <code>cache_size</code> and <code>num_blocks</code> recomputes.
       </p>
 
       <h3 data-ww-edit="home-seo-content-heading-2" data-ww-kind="text" data-ww-label="Heading 2" data-ww-group="About the Cache Cruncher Cache Simulator">What can you calculate and simulate?</h3>
       <ul>
-        <li><strong>Cache configuration:</strong> number of blocks, number of sets,
+        <li><strong data-ww-edit="home-seo-content-inline-3" data-ww-kind="text" data-ww-label="Text 3" data-ww-group="About the Cache Cruncher Cache Simulator">Cache configuration:</strong> number of blocks, number of sets,
           index bits, offset bits, tag bits, tag-array storage, valid-bit overhead,
           total cache overhead, and a visual Cache Simulator table.</li>
-        <li><strong>Memory simulator views:</strong> physical and virtual address space,
+        <li><strong data-ww-edit="home-seo-content-inline-4" data-ww-kind="text" data-ww-label="Text 4" data-ww-group="About the Cache Cruncher Cache Simulator">Memory simulator views:</strong> physical and virtual address space,
           addressable memory, nearby memory blocks, and the relationship between bits and bytes.</li>
-        <li><strong>Virtual memory:</strong> page size, page offset bits, virtual
+        <li><strong data-ww-edit="home-seo-content-inline-5" data-ww-kind="text" data-ww-label="Text 5" data-ww-group="About the Cache Cruncher Cache Simulator">Virtual memory:</strong> page size, page offset bits, virtual
           page number bits, virtual and physical page counts, and full
           page-table size estimation including protection bits.</li>
-        <li><strong>TLB:</strong> TLB index bits and TLB tag bits from VPN width
+        <li><strong data-ww-edit="home-seo-content-inline-6" data-ww-kind="text" data-ww-label="Text 6" data-ww-group="About the Cache Cruncher Cache Simulator">TLB:</strong> TLB index bits and TLB tag bits from VPN width
           and the number of TLB rows.</li>
       </ul>
 
@@ -320,7 +320,7 @@
       <h3 data-ww-edit="home-seo-content-heading-9" data-ww-kind="text" data-ww-label="Heading 9" data-ww-group="About the Cache Cruncher Cache Simulator">Support the tool</h3>
       <p data-ww-edit="home-seo-content-text-5" data-ww-kind="multiline" data-ww-label="Paragraph 5" data-ww-group="About the Cache Cruncher Cache Simulator">If you like Cache Cruncher, I appreciate the support. The site already includes sponsor links at the top, and you can also connect with me on LinkedIn.</p>
       <p><a data-ww-edit="linkedin" data-ww-kind="url" data-ww-label="LinkedIn" data-ww-group="Contact details" data-ww-help="Where your LinkedIn link goes." data-ww-part="link" class="linkedin-btn" href="https://www.linkedin.com/in/stevepwheeler" target="_blank" rel="noopener">LinkedIn</a></p>
-      <p><strong>Built by Steve Wheeler</strong> — UTSA student from 2023–2025, built while taking Professor Ortiz’s computer infrastructure class to stay engaged and learn.</p>
+      <p><strong data-ww-edit="home-seo-content-inline-7" data-ww-kind="text" data-ww-label="Text 7" data-ww-group="About the Cache Cruncher Cache Simulator">Built by Steve Wheeler</strong> — UTSA student from 2023–2025, built while taking Professor Ortiz’s computer infrastructure class to stay engaged and learn.</p>
     </article>
   </main>
 

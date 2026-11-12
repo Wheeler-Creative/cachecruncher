@@ -16180,7 +16180,8 @@ function closestIn($2) {
     let found = matched.get(selector);
     if (!found) matched.set(selector, found = new Set($2(selector).toArray()));
     let at2 = node && node.type !== "root" && !isElement(node) ? node.parent : node;
-    for (; at2 && isElement(at2); at2 = at2.parent) if (found.has(at2)) return at2;
+    const up = (current2) => current2.parent?.type === "root" && current2.parent.parent ? current2.parent.parent : current2.parent;
+    for (; at2 && isElement(at2); at2 = up(at2)) if (found.has(at2)) return at2;
     return null;
   };
 }
@@ -16691,10 +16692,18 @@ function tagContent(html, { route: route2 = "/", styles = "", chromeOnly = false
   if (!source.trim()) return { html: source, tagged: [] };
   const $2 = load7(source, { sourceCodeLocationInfo: true, withStartIndices: true, withEndIndices: true });
   const all = proposeTags(source, { route: route2, styles }).filter((proposal) => !chromeOnly || proposal.chrome);
-  const proposals = all.filter((proposal) => !proposal.node?.attribs?.[EDIT_ATTRIBUTE]);
   const declared = new Set(
     $2(`[${EDIT_ATTRIBUTE}]`).toArray().map((node) => String($2(node).attr(EDIT_ATTRIBUTE)))
   );
+  const fresh = all.filter((proposal) => !proposal.node?.attribs?.[EDIT_ATTRIBUTE]);
+  const used = /* @__PURE__ */ new Set([...declared, ...fresh.map((proposal) => proposal.id)]);
+  const proposals = fresh.map((proposal) => {
+    if (!declared.has(proposal.id) || proposal.chrome || proposal.background || proposal.group === CONTACT_GROUP) return proposal;
+    let id2 = proposal.id;
+    for (let n = 2; used.has(id2); n += 1) id2 = `${proposal.id.slice(0, MAX_SLOT_ID - String(n).length - 1)}-${n}`;
+    used.add(id2);
+    return { ...proposal, id: id2 };
+  });
   const completions = [];
   const completed = /* @__PURE__ */ new Set();
   for (const proposal of all) {
