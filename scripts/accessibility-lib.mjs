@@ -76,21 +76,47 @@ export async function scanPage(page, { tags = WCAG_21_AA_TAGS, scriptPath } = {}
           return null;
         }
       };
-      // Every element that holds the colour a failing node inherits. The generated class is also carried by all
-      // text that had the same inline style, on other pages and over photos axe cannot measure, so a rule on it
-      // is only offered where each carrier in its place is one of these.
-      let failingHolders = null;
-      const holdersOfFailures = () => {
-        if (failingHolders) return failingHolders;
-        failingHolders = new Set();
+      // Every element axe measured as failing. The generated class is also carried by all text that had the same
+      // inline style, on other pages and over photos axe cannot measure, so a rule on it is only offered where the
+      // text it would recolour in its place is all text axe measured as failing.
+      let failingNodes = null;
+      const measuredFailing = () => {
+        if (failingNodes) return failingNodes;
+        failingNodes = new Set();
         for (const violation of judged) {
           if (violation.id !== "color-contrast") continue;
           for (const node of violation.nodes) {
-            const holder = colourHolder(Array.isArray(node.target) ? node.target.join(" ") : String(node.target || ""));
-            if (holder) failingHolders.add(holder);
+            try {
+              const element = document.querySelector(Array.isArray(node.target) ? node.target.join(" ") : String(node.target || ""));
+              if (element) failingNodes.add(element);
+            } catch { /* a target the page cannot select proves nothing */ }
           }
         }
-        return failingHolders;
+        return failingNodes;
+      };
+      // Text axe judges: it skips text with no letter or digit (a lone comma between two failing spans), which
+      // the rule may recolour with them.
+      const judgedText = (element) => [...element.childNodes].some((child) => child.nodeType === 3 && /[\p{L}\p{N}]/u.test(child.textContent || ""));
+      // Proved by trying it: the rule is declared after every stylesheet and each element whose text it recolours
+      // must be one axe measured as failing. Earlier repairs that pinned some carriers (a longer path rule) and
+      // nested carriers that only pass the colour on no longer stop the fix: a copied Termly privacy policy on
+      // Banner's Cave (Nov 12 2026, #595959 on #434343) kept 55 failures because a few carriers were already fixed.
+      const recoloursOnlyFailing = (selector, anchor) => {
+        const measured = measuredFailing();
+        probe = probe || document.createElement("style");
+        probe.textContent = `${selector}{color:rgb(1, 2, 3)!important}`;
+        document.head.appendChild(probe);
+        try {
+          let reached = false;
+          for (const element of [anchor, ...anchor.querySelectorAll("*")]) {
+            if (getComputedStyle(element).color !== "rgb(1, 2, 3)" || !judgedText(element)) continue;
+            if (!measured.has(element)) return false;
+            reached = true;
+          }
+          return reached;
+        } finally {
+          probe.remove();
+        }
       };
       const colourSource = (target) => {
         try {
@@ -99,13 +125,13 @@ export async function scanPage(page, { tags = WCAG_21_AA_TAGS, scriptPath } = {}
           if (!generated) return { selector: "", shared: false };
           const anchor = holder.closest("[id],[data-ww-block]");
           if (!anchor) return { selector: "", shared: true };
-          const carriers = [...anchor.querySelectorAll(`.${CSS.escape(generated)}`), ...(anchor.classList.contains(generated) ? [anchor] : [])];
-          const measured = holdersOfFailures();
-          if (carriers.some((carrier) => !measured.has(carrier))) return { selector: "", shared: true };
           const block = anchor.getAttribute("data-ww-block");
           const place = block ? `[data-ww-block="${CSS.escape(block)}"]` : `#${CSS.escape(anchor.id)}`;
-          return { selector: `${place}${anchor === holder ? "" : " "}.${generated}`, shared: false };
+          const selector = `${place}${anchor === holder ? "" : " "}.${generated}`;
+          if (!recoloursOnlyFailing(selector, anchor)) return { selector: "", shared: true };
+          return { selector, shared: false };
         } catch {
+          probe?.remove();
           return { selector: "", shared: false };
         }
       };

@@ -674,9 +674,21 @@ function projectShopCatalog(snapshot, params) {
   }
   let entries = [...groups.values()];
   const amount = (group) => Math.min(...group.filter((row) => row.priceAmount != null && Number.isFinite(Number(row.priceAmount))).map((row) => Number(row.priceAmount)));
-  const sort = params.get("sort");
+  // The shopper's choice, else the first order the owner chose for the filter bar (storeDisplay.defaultSort), else by name.
+  const sort = params.get("sort") || snapshot.storeDisplay?.defaultSort || "name";
+  const byTitle = (a, b) => String(a[0].title).localeCompare(String(b[0].title));
+  // Newest: when the product was added. Order-by date: the next cutoff still open first; closed or undated ones last.
+  const when = (group) => sort === "newest"
+    ? Math.max(...group.map((row) => Date.parse(row.createdAt || "") || -Infinity))
+    : Math.min(...group.map((row) => { const at = Date.parse(row.catalog?.orderCutoffAt || ""); return at > Date.now() ? at : Infinity; }));
   entries.sort((a, b) => {
-    if (!["price-asc", "price-desc"].includes(sort)) return String(a[0].title).localeCompare(String(b[0].title));
+    if (sort === "name-desc") return byTitle(b, a);
+    if (sort === "newest" || sort === "cutoff") {
+      const left = when(a), right = when(b);
+      if (left === right) return byTitle(a, b);
+      return Math.sign(sort === "newest" ? right - left : left - right);
+    }
+    if (!["price-asc", "price-desc"].includes(sort)) return byTitle(a, b);
     const left = amount(a), right = amount(b);
     if (!Number.isFinite(left) || !Number.isFinite(right)) return Number.isFinite(left) ? -1 : Number.isFinite(right) ? 1 : 0;
     // Different currencies are grouped, never presented as converted prices.
@@ -926,7 +938,10 @@ async function serveCommerceShop(env, url) {
     + (ratio ? '--ww-store-ratio:' + ratio + ';' : "") + '--ww-store-fit:' + (display.photoFit === "fill" ? "cover" : "contain");
   const attributes = { "data-ww-store-display": "", "data-ww-store-fit": "", ...(display.photoShape === "natural" ? { "data-ww-store-natural": "" } : {}),
     ...(cardStyle ? { "data-ww-store-cards": cardStyle } : {}), ...(columns ? { "data-ww-product-columns": String(columns) } : {}),
-    ...(ratio ? { "data-ww-product-image-ratio": ratio } : {}), style };
+    ...(ratio ? { "data-ww-product-image-ratio": ratio } : {}),
+    // The owner's filter bar layout and look, read by the store's stylesheet before the bar is drawn.
+    ...(["row", "side", "menu"].includes(display.filterLayout) ? { "data-ww-store-filter-layout": display.filterLayout } : {}),
+    ...(display.filterLook === "quiet" ? { "data-ww-store-filter-look": "quiet" } : {}), style };
   const look = Object.entries(attributes).map(([name, value]) => ' ' + name + (value === "" ? "" : '="' + value + '"')).join("");
   const category = url.searchParams.get("category") || "*";
   const cutoff = url.searchParams.get("cutoffDate") || "";

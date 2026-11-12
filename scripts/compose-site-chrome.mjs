@@ -15374,7 +15374,7 @@ function scriptDisplayStrings(source) {
     if (isString || isTemplate) {
       const value = isString ? node.value : node.quasis.map((part, i2) => part.value.cooked + (i2 < node.expressions.length ? token(i2) : "")).join("");
       const styling = ancestors.some((item) => item.type === "VariableDeclarator" && /^(?:CSS|FONT|styles?)$/i.test(item.id?.name || "")) || ancestors.some((item) => item.type === "AssignmentExpression" && /^(?:font|fillStyle|strokeStyle|className)$/.test(propertyName(item.left?.property) || ""));
-      const displayContext = ancestors.some((item) => item.type === "VariableDeclarator" && /^(?:detail|summary|baseLine|addonLines|quoteText)$/.test(item.id?.name || "")) || ancestors.some((item) => item.type === "Property" && /^(?:lines|summary|description)$/.test(propertyName(item.key) || "")) || ancestors.some((item) => item.type === "AssignmentExpression" && /^(?:textContent|innerHTML|alt|title|placeholder)$/.test(propertyName(item.left?.property) || "")) || parent?.type === "Property" && /^(?:label|detail|message)$/.test(propertyName(parent.key) || "") || ancestors.some((item) => {
+      const displayContext = ancestors.some((item) => item.type === "VariableDeclarator" && /^(?:detail|summary|baseLine|addonLines|quoteText)$/.test(item.id?.name || "")) || ancestors.some((item) => item.type === "Property" && /^(?:lines|summary|description)$/.test(propertyName(item.key) || "")) || ancestors.some((item) => item.type === "AssignmentExpression" && /^(?:textContent|innerHTML|alt|title|placeholder)$/.test(propertyName(item.left?.property) || "") && node.start >= item.right.start && node.end <= item.right.end) || parent?.type === "Property" && /^(?:label|detail|message)$/.test(propertyName(parent.key) || "") || ancestors.some((item) => {
         if (item.type !== "CallExpression") return false;
         const name = propertyName(item.callee?.property) || item.callee?.name || "";
         const argument = item.arguments[name === "setNote" ? 1 : 0];
@@ -15382,7 +15382,7 @@ function scriptDisplayStrings(source) {
       });
       const nearestCall = [...ancestors].reverse().find((item) => item.type === "CallExpression");
       const callName = propertyName(nearestCall?.callee?.property) || nearestCall?.callee?.name || "";
-      const forbidden = parent?.directive || nearestCall?.callee?.object?.name === "console" || callName === "set" && nearestCall.arguments[0]?.value !== "message" || /^(?:addEventListener|querySelector|querySelectorAll|createElement|toLocaleDateString|toLocaleString)$/.test(callName) || parent?.type === "BinaryExpression" && ["===", "!==", "==", "!="].includes(parent.operator) || parent?.type === "Property" && parent.key === node || parent?.type === "MemberExpression" && parent.property === node || parent?.type === "ImportDeclaration" || parent?.type === "SwitchCase" && parent.test === node;
+      const forbidden = parent?.directive || nearestCall?.callee?.object?.name === "console" || callName === "set" && nearestCall.arguments[0]?.value !== "message" || /^(?:addEventListener|removeEventListener|querySelector|querySelectorAll|getElementById|getElementsByClassName|getElementsByTagName|getElementsByName|closest|matches|createElement|getAttribute|hasAttribute|removeAttribute|toLocaleDateString|toLocaleString)$/.test(callName) || parent?.type === "BinaryExpression" && ["===", "!==", "==", "!="].includes(parent.operator) || parent?.type === "Property" && parent.key === node || parent?.type === "MemberExpression" && parent.property === node || parent?.type === "ImportDeclaration" || parent?.type === "SwitchCase" && parent.test === node;
       const human = /\p{L}/u.test(value.replace(/WWEXPR[A-Z]+TOKEN/g, "")) && (/<[a-z][a-z0-9-]*[\s>]/i.test(value) || displayContext);
       const code = /^(?:[#.]|\/?(?:api|images)\/|https?:|sms:)/.test(value.trim()) || /(?:font-family|\{[^}]*:|^[\w-]+:\/)/.test(value) || /^[\w.-]+\.(?:png|jpe?g|js|webp)$/.test(value);
       if (human && !styling && !forbidden && !code) {
@@ -15457,18 +15457,29 @@ function localizeScript(script, options) {
     }
   }
   const tree = parse3(script.source, { ecmaVersion: "latest", sourceType: "module" });
-  function pageLinks(node) {
+  function pageLinks(node, parent = null) {
     if (!node || typeof node !== "object") return;
-    if (node.type === "Literal" && typeof node.value === "string" && node.value.startsWith("/") && options.routeMap?.has(node.value)) {
+    if (node.type === "Literal" && typeof node.value === "string" && node.value.startsWith("/") && options.routeMap?.has(node.value) && !comparedOrSearched(node, parent)) {
       if (!patches.some((patch) => patch.start === node.start)) patches.push({ start: node.start, end: node.end, text: JSON.stringify(options.routeMap.get(node.value)) });
     }
-    for (const child of Object.values(node)) for (const item of Array.isArray(child) ? child : [child]) if (item?.type) pageLinks(item);
+    for (const child of Object.values(node)) for (const item of Array.isArray(child) ? child : [child]) if (item?.type) pageLinks(item, node);
   }
   pageLinks(tree);
   let output = script.source;
   for (const patch of patches.sort((a, b) => b.start - a.start)) output = output.slice(0, patch.start) + patch.text + output.slice(patch.end);
   parse3(output, { ecmaVersion: "latest", sourceType: "module" });
   return { source: output, missing };
+}
+var SEARCHES = /^(?:startsWith|endsWith|includes|indexOf|lastIndexOf|split|replace|replaceAll|match|matchAll|search|test|has|get)$/;
+function comparedOrSearched(node, parent) {
+  if (!parent) return false;
+  if (parent.type === "BinaryExpression" && ["===", "!==", "==", "!="].includes(parent.operator)) return true;
+  if (parent.type === "SwitchCase" && parent.test === node) return true;
+  if (parent.type === "CallExpression" && parent.arguments.includes(node)) {
+    const name = parent.callee?.property?.name || parent.callee?.property?.value || "";
+    return SEARCHES.test(name);
+  }
+  return false;
 }
 function localizedScriptPath(language, file) {
   return `ww-language/${language}/${file}`;

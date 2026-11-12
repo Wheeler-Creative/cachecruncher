@@ -200,9 +200,14 @@ function linkSelector(target) {
 // Larkfield Bike Repair, Nov 11 2026: the header button's dark-on-blue text was left failing on every page.
 function placedTarget(selector, html) {
   if (specificEnough(selector)) return selector;
+  return ownTarget(html) || selector;
+}
+
+// The failing element's own edit id, from its opening tag only (a child's id is not the element's), or null.
+function ownTarget(html) {
   const source = String(html || "").trim();
   const edit = /^<[^>]*\bdata-ww-edit="([\w:.-]{1,120})"/i.exec(source)?.[1];
-  if (!edit) return selector;
+  if (!edit) return null;
   const tag = /^<([a-z][a-z0-9-]*)/i.exec(source)?.[1]?.toLowerCase() || "";
   return `${tag}[data-ww-edit="${edit}"]`;
 }
@@ -233,15 +238,20 @@ function contrastRules(violations) {
       }
       const measured = targetText(node.colourTarget || node.scopedTarget || node.target);
       const exact = node.colourTarget || node.scopedTarget ? measured : placedTarget(measured, node.html);
+      // EVERY FAILING ELEMENT GETS ITS FIX (owner, Nov 11 2026: "Dont let things fail but force it to be fixed"). Where
+      // the colour comes from a class other elements share, the class is never recoloured; the element's own edit id,
+      // which nothing else carries, takes the colour instead, so white text over a photo elsewhere keeps its colour.
+      const own = ownTarget(node.html);
+      const onOwn = () => { if (own) rules.push({ selector: own, exact: own, declaration: `color: ${color} !important` }); };
       if (node.colourRule && !node.colourTarget) {
-        if (reachesWholeClass(node.colourRule)) continue;
+        if (reachesWholeClass(node.colourRule)) { onOwn(); continue; }
         rules.push({ selector: node.colourRule, exact: node.colourRule, declaration: `color: ${color}`, sourceRule: true });
         continue;
       }
       // The colour sits on a class that other elements carry. Only the scan's colourTarget proves each carrier in
       // its place failed; a bare class (an older scan, or axe's own selector) would recolour text that passes
       // where this one fails, so the page's own repair handles it instead.
-      if (sharedClassSubject(exact) && !(node.colourTarget && anchored(exact))) continue;
+      if (sharedClassSubject(exact) && !(node.colourTarget && anchored(exact))) { onOwn(); continue; }
       rules.push({ selector: exact.replace(POSITIONAL, "").replace(/\s+/g, " ").trim(), exact, declaration: `color: ${color} !important` });
     }
   }
