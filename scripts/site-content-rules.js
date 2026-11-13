@@ -46,7 +46,7 @@
 //   getAttribute(n)    string | null
 //   setAttribute(n,v)
 //   removeAttribute(n)
-//   setInnerContent(t) replace children with text
+//   setInnerContent(t) replace children with text ({ html: true }: with markup)
 //   replace(html)      replace the element itself with markup
 //
 // Nothing reads a parent, a sibling or an index, because HTMLRewriter streams
@@ -57,12 +57,19 @@ export const CONTENT_VERSION = 1;
 // 2: owner-made links on text and photographs, and the words shown for email and phone links.
 // 3: background images and videos.
 // 4: the words a photograph place reads aloud (a logo's alt), and the header and footer as fields of their own.
-export const CONTENT_RULES_VERSION = 4;
+// 5: a sentence's words with **bold**, *italic* and line breaks (FORMAT_ATTRIBUTE).
+export const CONTENT_RULES_VERSION = 5;
 
 export const EDIT_ATTRIBUTE = "data-ww-edit";
 export const KIND_ATTRIBUTE = "data-ww-kind";
 export const LABEL_ATTRIBUTE = "data-ww-label";
 export const PART_ATTRIBUTE = "data-ww-part";
+// A sentence whose words carry bold, italic or line breaks: <dd>Free on orders <strong>over $100</strong>.</dd>.
+// Its value is the words with **bold**, *italic* and line breaks written as such, so the whole sentence is one
+// field and saving it keeps its emphasis. Without this the sentence was not "just text" and was never offered;
+// only the bold piece inside it was, which an owner reads as half a sentence being editable (Banner's Cave,
+// 2026-11-12, "Before you order").
+export const FORMAT_ATTRIBUTE = "data-ww-format";
 export const HELP_ATTRIBUTE = "data-ww-help";
 // Where the field belongs, so the console can group a site's text by section
 // without parsing an id to work it out. The site says it; the screen shows it.
@@ -322,6 +329,16 @@ function retargetAnchor(element, href, newTab) {
 // `text` fills the element's words, `href` fills its link, `src` fills its
 // image. A kind that returns no `text` never touches an element's contents; a
 // kind that returns no `href` never touches its link.
+// The words of a formatted sentence as markup: everything escaped, then **bold**, *italic* and line breaks. Nothing
+// an owner types can become any other markup.
+export function inlineMarkup(value) {
+  return String(value ?? "").trim()
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;")
+    .replace(/\*\*(\S(?:[^*]*?\S)?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(\S(?:[^*]*?\S)?)\*/g, "<em>$1</em>")
+    .replace(/\r?\n/g, "<br>");
+}
+
 export const KINDS = Object.freeze({
   text: {
     editor: "text",
@@ -1026,7 +1043,11 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
       }
       const shown = words || rendered.text;
       if ((part === "text" || part === "both" || words) && typeof shown === "string" && (shown || stored.clear)) {
-        element.setInnerContent(shown);
+        if (!words && (kind === "text" || kind === "multiline") && element.getAttribute(FORMAT_ATTRIBUTE) === "inline") {
+          element.setInnerContent(inlineMarkup(shown), { html: true });
+        } else {
+          element.setInnerContent(shown);
+        }
       }
       // Words that are not already a link, made one: after the words are in, around whatever the element now holds.
       if (link && !inLink && element.tagName !== "a" && kind !== "image" && !KEEPS_ITS_CONTENT.has(element.tagName)) {
@@ -1129,6 +1150,8 @@ export function declaredFields(references) {
     if (!field.current && reference.current) field.current = reference.current;
     if (!field.href && reference.href) field.href = reference.href;
     if (field.shownAlt === undefined && reference.shownAlt !== undefined) field.shownAlt = reference.shownAlt;
+    // Its words carry **bold** and *italic*, which the editor offers buttons for and the site draws.
+    if (reference.format === "inline") field.format = "inline";
     // The header's and footer's place in them, so the editor can list a menu in the order a visitor reads it.
     if (field.area && field.order === undefined && Number.isFinite(reference.offset)) field.order = reference.offset;
     // Somewhere it sits inside another link (or a picture frame), so it cannot take a link of its own.

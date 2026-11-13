@@ -8776,6 +8776,7 @@ var EDIT_ATTRIBUTE = "data-ww-edit";
 var KIND_ATTRIBUTE = "data-ww-kind";
 var LABEL_ATTRIBUTE = "data-ww-label";
 var PART_ATTRIBUTE = "data-ww-part";
+var FORMAT_ATTRIBUTE = "data-ww-format";
 var HELP_ATTRIBUTE = "data-ww-help";
 var GROUP_ATTRIBUTE = "data-ww-group";
 var SHAPE_ATTRIBUTE = "data-ww-shape";
@@ -16012,6 +16013,41 @@ var CALENDAR_PROVIDERS = Object.freeze([
 function placeLabel(block, route2, ordinal = 1) {
   return ordinal > 1 ? `Photograph ${ordinal}` : "Photograph";
 }
+var FORMAT_MARKS = Object.freeze({ strong: "**", b: "**", em: "*", i: "*" });
+function formattedWords(node) {
+  let out = "";
+  let marked = false;
+  for (const child of node?.children || []) {
+    if (child.type === "comment") continue;
+    if (child.type === "text") {
+      const data2 = String(child.data || "");
+      if (data2.includes("*")) return null;
+      out += data2.replace(/\s+/g, " ");
+      continue;
+    }
+    if (child.type !== "tag") return null;
+    if (child.tagName === "br") {
+      out += "\n";
+      marked = true;
+      continue;
+    }
+    const mark = FORMAT_MARKS[child.tagName];
+    if (!mark) return null;
+    if (Object.keys(child.attribs || {}).some((name) => !name.startsWith("data-ww-"))) return null;
+    if ((child.children || []).some((inner2) => inner2.type !== "text")) return null;
+    const inner = (child.children || []).map((text) => String(text.data || "")).join("").replace(/\s+/g, " ");
+    if (inner.includes("*")) return null;
+    const core = inner.trim();
+    if (!core) {
+      out += inner;
+      continue;
+    }
+    out += `${inner.startsWith(" ") ? " " : ""}${mark}${core}${mark}${inner.endsWith(" ") ? " " : ""}`;
+    marked = true;
+  }
+  if (!marked) return null;
+  return out.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).join("\n").trim() || null;
+}
 function libraryPictureName(path5) {
   const match = /^\/(?:images|media)\/([^/?#]+)(?:[?#].*)?$/.exec(String(path5 || "").trim());
   if (!match) return "";
@@ -16324,6 +16360,11 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
     return { suffix: n === 1 ? role2 : `${role2}-${n}`, ordinal: n };
   };
   const claimed = new Set(proposed.map((entry) => entry.node));
+  const formattedNodes = /* @__PURE__ */ new Set();
+  const inFormatted = (node) => {
+    for (let at2 = node.parent; at2; at2 = at2.parent) if (formattedNodes.has(at2)) return true;
+    return false;
+  };
   for (const node of $2([...TEXT_TAGS, ...LEAF_TAGS].join(",")).toArray()) {
     const element = $2(node);
     if (element.hasClass("ww-page-title")) continue;
@@ -16332,8 +16373,12 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
     if (leafRole && (element.attr("aria-hidden") === "true" || element.attr("hidden") !== void 0)) continue;
     const block = blockAt(offsetOf(node));
     if (!block) continue;
-    if ((node.children || []).some((child) => child.type === "tag")) continue;
-    const words = element.text().replace(/\s+/g, " ").trim();
+    if (inFormatted(node)) continue;
+    const hasElements = (node.children || []).some((child) => child.type === "tag");
+    const formatted = hasElements && TEXT_TAGS.includes(node.tagName) ? formattedWords(node) : null;
+    if (hasElements && formatted === null) continue;
+    if (formatted !== null) formattedNodes.add(node);
+    const words = formatted ?? element.text().replace(/\s+/g, " ").trim();
     if (!words || words.length > MAX_TEXT_LENGTH) continue;
     if (leafRole && !/[\p{L}\p{N}]/u.test(words)) continue;
     const heading = /^h[1-6]$/.test(node.tagName);
@@ -16348,7 +16393,8 @@ function proposeTags(html, { route: route2 = "/", styles = "" } = {}) {
       // Arts District · San Antonio" - and giving that a textarea is as wrong
       // as giving a three-sentence paragraph a single-line input where the
       // owner cannot see what they are editing. The length decides.
-      kind: heading || words.length <= SINGLE_LINE_LENGTH ? "text" : "multiline",
+      kind: (heading || words.length <= SINGLE_LINE_LENGTH) && !words.includes("\n") ? "text" : "multiline",
+      ...formatted !== null ? { format: "inline" } : {},
       // The label says WHAT, the group says WHERE. Splitting them is what
       // keeps the label short enough to read: "Paragraph 2" under a heading
       // that names the section, rather than forty characters of both.
@@ -16742,7 +16788,9 @@ function tagContent(html, { route: route2 = "/", styles = "", chromeOnly = false
       // On every element, not once per id: the site resolves each element from what it carries.
       ...proposal.background ? [attribute(BACKGROUND_ATTRIBUTE, proposal.background)] : [],
       // "text" is the default, so it is only written when it is not.
-      ...proposal.part && proposal.part !== "text" ? [attribute(PART_ATTRIBUTE, proposal.part)] : []
+      ...proposal.part && proposal.part !== "text" ? [attribute(PART_ATTRIBUTE, proposal.part)] : [],
+      // On the element, not once per id: it is how the site knows the saved words carry **bold** and *italic*.
+      ...proposal.format ? [attribute(FORMAT_ATTRIBUTE, proposal.format)] : []
     ];
     edits.push({ start: at2, end: at2, text: ` ${parts.join(" ")}` });
     tagged.push(`${proposal.kind}:${proposal.id}`);
