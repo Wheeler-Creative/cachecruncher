@@ -115,11 +115,13 @@ jobs:
             exit "$status"
           fi
       - name: Merge approved pull request
+        id: merge
         env:
           # The workflow is merging a PR in its own repository. The built-in
           # token is scoped to exactly that repository and avoids requiring a
           # separately copied MANAGED_SITE_GITHUB_TOKEN secret on every site.
           GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ needs.find-request.outputs.request_branch }}
         run: |
           # The validation above rebuilt generated files (public/data/site.json and the like) in this checkout. When
           # the request itself changed one of them, the branch switch gh pr merge makes after the merge refused to
@@ -128,7 +130,32 @@ jobs:
           # next step fetches main and rebuilds it.
           git checkout -- .
           git clean -fdq
-          gh pr merge "${{ needs.find-request.outputs.request_branch }}" --squash --delete-branch
+          # GITHUB'S ANSWER IS NOT THE RESULT (2026-11-13). For hours GitHub took over ten seconds to make a merge in
+          # the platform's repository, longer than its own gateway waits: merges were refused ("502 Bad Gateway" after
+          # ten seconds, "Merge already in progress", "The rule did not run because of a timeout"), and one was
+          # answered an error after it had been made. Websites' repositories merged in a second when measured, but
+          # nothing says the same cannot happen to one. So a failed call is read back before anything is concluded from it, and a fault on GitHub's side is
+          # tried again: four tries over six minutes. If GitHub still refuses, the run fails WITHOUT marking the
+          # request failed (the refused output, read by "Mark failed" below): the change stays approved with its
+          # preview, and the platform's publish recovery starts the publish again once, then hands the preview back
+          # to the owner in words (src/edits/publish-recovery.js). An answer that is not a fault (a conflict, a
+          # check) fails at once and is marked failed, as before.
+          fault() { printf '%s' "$1" | grep -qiE 'HTTP 5[0-9][0-9]|status code: 5[0-9][0-9]|Bad Gateway|Server Error|Something went wrong|timed out|timeout|already in progress|rate limit'; }
+          attempt=1
+          until answer=$(gh pr merge "$BRANCH" --squash --delete-branch 2>&1); do
+            echo "$answer"
+            state=$(gh pr view "$BRANCH" --json state --jq .state 2>/dev/null) || state=unread
+            if [ "$state" = MERGED ]; then echo "The pull request is merged, in spite of that answer."; answer=""; break; fi
+            fault "$answer" || exit 1
+            if [ "$attempt" -ge 4 ]; then
+              echo "refused=true" >> "$GITHUB_OUTPUT"
+              echo "::error::GitHub refused to merge the approved change four times. It stays approved with its preview, and publishing is started again shortly."
+              exit 1
+            fi
+            sleep $(( attempt * 60 ))
+            attempt=$(( attempt + 1 ))
+          done
+          [ -z "$answer" ] || echo "$answer"
       - name: Deploy merged main branch
         env:
           GH_TOKEN: ${{ github.token }}
@@ -187,8 +214,10 @@ jobs:
           CHANGED_FILES: ${{ steps.change.outputs.files }}
           CHANGE_SUMMARY: ${{ steps.change.outputs.summary }}
         run: node scripts/managed-site/record-change.mjs deployed
+      # Not when GitHub refused the merge: nothing about the change failed, and a request marked failed is not
+      # started again by the publish recovery (it reads approved requests that are still preview_ready).
       - name: Mark failed
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.merge.outputs.refused != 'true' }}
         env:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
