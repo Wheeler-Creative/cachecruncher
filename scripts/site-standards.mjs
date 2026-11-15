@@ -235,12 +235,29 @@ export function fragmentLinkIssues(html) {
   return issues;
 }
 
+// THE WEBSITE'S OWN BOOKING PAGE. A website that takes bookings has a booking page at /_booking/, which its Worker
+// draws inside the site's header, footer and stylesheet as the page is served (src/site-customer-runtime.js), so
+// there is no file behind it for localLinkIssues to find. A link there marked data-ww-booking-link is the platform's
+// own Book button: the website shows it while guests can book and hides it otherwise (src/site-content-worker.js
+// applyBookingPlaces, the same address pattern), so it is never a dead link. This check called that link missing
+// although the generator is told to write it (generate-site-build.mjs bookingsContext), and on 2026-11-14 it failed
+// an edit that put a Book a fitting button on a suit shop's pages. A link to /_booking/ WITHOUT the mark is still
+// judged as a file: nothing hides it on a website that takes no bookings. src/content/site-rules.js mirrors this for
+// the editor's preflight, which runs in the Worker and cannot import this file.
+export const BOOKING_PAGE_LINK = /^\/_booking\/?(?:[?#]|$)/;
+export const BOOKING_LINK_ATTRIBUTE = "data-ww-booking-link";
+
 export async function localLinkIssues(html, route, siteRoot = null, fileOverrides = null) {
   // Without a site root there is no tree to resolve against, so link
   // existence cannot be judged - the other checks still can.
   if (!siteRoot) return [];
   const issues = [];
-  for (const href of attributeValues(html, "a", "href")) {
+  const $ = parseHtml(html);
+  for (const element of $("a").toArray()) {
+    const raw = $(element).attr("href");
+    if (typeof raw !== "string") continue;
+    const href = raw.trim();
+    if (BOOKING_PAGE_LINK.test(href) && $(element).attr(BOOKING_LINK_ATTRIBUTE) !== undefined) continue;
     // Anything with a URI scheme is not a file in this site, so it is not ours
     // to resolve. This was an allowlist of mailto/tel/https, which meant a
     // perfectly good link failed the build for using a scheme nobody had
