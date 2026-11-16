@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { requireEnvironment, updateBuildsForRequest, updateRequest } from "./lib.mjs";
+import { insertRow, requireEnvironment, updateBuildsForRequest, updateRequest } from "./lib.mjs";
 
 const invokedDirectly = process.argv[1]
   && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -10,6 +10,25 @@ export async function applyRequestStatus({ status, requestId, env = process.env,
   if (!requestId) throw new Error("Request id is required");
   if (status === "preview-cleaned") {
     await updateRequest(requestId, { preview_worker_name: null }, fetchImpl);
+    return;
+  }
+  // The publish refused a branch that was not the commit the owner approved (find-approved.mjs). Nothing is written
+  // to the request itself: it stays approved, not failed, and the platform's publish recovery reads this event, hands
+  // the preview back to the owner with the reason, and never starts the publish again for that approval.
+  if (status === "refused") {
+    const commit = (value) => (/^[0-9a-f]{40}$/.test(value || "") ? value : null);
+    await insertRow("edit_request_events", {
+      request_id: requestId,
+      event_type: "promotion_refused",
+      payload: {
+        reason: env.REFUSAL || "branch_moved",
+        approvedCommit: commit(env.APPROVED_COMMIT),
+        branchHead: commit(env.BRANCH_HEAD),
+        run: env.GITHUB_SERVER_URL && env.GITHUB_REPOSITORY && env.GITHUB_RUN_ID
+          ? `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}` : null,
+        at: now.toISOString()
+      }
+    }, fetchImpl);
     return;
   }
   const timestamp = now.toISOString();

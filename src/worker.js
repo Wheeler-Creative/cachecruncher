@@ -721,7 +721,7 @@ function projectShopCatalog(snapshot, params) {
       priceHighAmount: amounts.length ? Math.max(...amounts) : null,
       regularPriceAmount: row.regularPriceAmount, onSale: displayed.some(variant => variant.onSale),
       catalog: { saleType: row.catalog?.saleType, orderCutoffAt: row.catalog?.orderCutoffAt, orderCutoffTimeZone: row.catalog?.orderCutoffTimeZone,
-        releaseAt: row.catalog?.releaseAt, releaseDate: row.catalog?.releaseDate },
+        releaseAt: row.catalog?.releaseAt, releaseDate: row.catalog?.releaseDate, ...(row.catalog?.inStoreOnly === true ? { inStoreOnly: true } : {}) },
       orderingClosed: group.every((variant) => variant.orderingClosed),
       currency: row.currency, active: group.some((variant) => variant.active),
       purchasable: group.some((variant) => variant.active && variant.purchasable), variantCount: group.length
@@ -847,7 +847,11 @@ async function serveCommerceProductPage(request, env, pathname) {
   if (!product) return new Response("Product not found", { status: 404 });
   const image = product.imageUrl || product.catalog?.images?.[0]?.url || "";
   const available = product.active && product.purchasable;
-  const status = product.orderingClosed ? "Pre-orders closed" : available
+  // Sold in the shop only (catalog.inStoreOnly): never on sale online. Said with where to find the shop before any
+  // script runs, and told to search engines as in store only, not out of stock.
+  const inStore = product.catalog?.inStoreOnly === true;
+  const status = inStore ? "Available in our shop. Not sold online." + (snapshot.inStoreNote ? " " + escapeStoreHtml(snapshot.inStoreNote) : "")
+    : product.orderingClosed ? "Pre-orders closed" : available
     ? product.catalog?.saleType === "preorder" ? "Available to pre-order" : "Available"
     : "Not currently available to order";
   const schema = { "@context": "https://schema.org", "@type": "Product", name: product.title,
@@ -856,7 +860,7 @@ async function serveCommerceProductPage(request, env, pathname) {
     ...(product.priceAmount != null ? { offers: { "@type": "Offer", url: new URL(request.url).origin + route,
       priceCurrency: product.currency,
       price: product.priceAmount / (10 ** new Intl.NumberFormat("en", { style: "currency", currency: product.currency }).resolvedOptions().maximumFractionDigits),
-      availability: "https://schema.org/" + (available ? product.catalog?.saleType === "preorder" ? "PreOrder" : "InStock" : "OutOfStock") } } : {}) };
+      availability: "https://schema.org/" + (inStore ? "InStoreOnly" : available ? product.catalog?.saleType === "preorder" ? "PreOrder" : "InStock" : "OutOfStock") } } : {}) };
   const publicationLabels = { publisher: "Publisher", format: "Format", writer: "Writer", artist: "Artist", coverArtist: "Cover artist", series: "Series", issueNumber: "Issue / volume", rating: "Rating", variantDescription: "Cover variant", numberOfPages: "Pages" };
   const specs = product.catalog?.specs || [];
   const publicationMarkup = specs.length ? '<dl class="ww-store-publication ww-store-specs">' + specs.map((spec) => '<dt>' + escapeStoreHtml(spec.label) + '</dt><dd>' + escapeStoreHtml(spec.value) + '</dd>').join("") + '</dl>'

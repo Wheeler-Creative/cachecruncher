@@ -21,6 +21,11 @@ jobs:
       request_id: ${{ steps.find.outputs.request_id }}
       request_branch: ${{ steps.find.outputs.request_branch }}
       preview_worker_name: ${{ steps.find.outputs.preview_worker_name }}
+      # The commit the owner approved, the branch's head now, and why it is not published when it is not
+      # (scripts/managed-site/find-approved.mjs).
+      approved_commit: ${{ steps.find.outputs.approved_commit }}
+      branch_head: ${{ steps.find.outputs.branch_head }}
+      refusal: ${{ steps.find.outputs.refusal }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,9 +40,33 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: node scripts/managed-site/find-approved.mjs
 
+  # The branch is not the commit the owner approved: nothing is built or merged. The request stays approved, not
+  # failed; the platform hands the preview back to its owner with the reason (src/edits/publish-recovery.js).
+  refuse:
+    needs: find-request
+    if: ${{ needs.find-request.outputs.request_id != '' && needs.find-request.outputs.refusal != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Record the refusal
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          REFUSAL: ${{ needs.find-request.outputs.refusal }}
+          APPROVED_COMMIT: ${{ needs.find-request.outputs.approved_commit }}
+          BRANCH_HEAD: ${{ needs.find-request.outputs.branch_head }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          node scripts/managed-site/update-request.mjs refused
+          echo "::error::Not published: the change's branch is not the commit its owner approved ($REFUSAL). It stays approved; its owner is shown the preview again."
+          exit 1
+
   promote:
     needs: find-request
-    if: ${{ needs.find-request.outputs.request_id != '' }}
+    if: ${{ needs.find-request.outputs.request_id != '' && needs.find-request.outputs.refusal == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -48,9 +77,10 @@ jobs:
       checks: read
       statuses: read
     steps:
+      # Exactly the approved commit is validated, and only it can be merged (--match-head-commit below).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.find-request.outputs.request_branch }}
+          ref: ${{ needs.find-request.outputs.approved_commit }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -122,6 +152,7 @@ jobs:
           # separately copied MANAGED_SITE_GITHUB_TOKEN secret on every site.
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ needs.find-request.outputs.request_branch }}
+          APPROVED: ${{ needs.find-request.outputs.approved_commit }}
         run: |
           # The validation above rebuilt generated files (public/data/site.json and the like) in this checkout. When
           # the request itself changed one of them, the branch switch gh pr merge makes after the merge refused to
@@ -140,12 +171,22 @@ jobs:
           # preview, and the platform's publish recovery starts the publish again once, then hands the preview back
           # to the owner in words (src/edits/publish-recovery.js). An answer that is not a fault (a conflict, a
           # check) fails at once and is marked failed, as before.
+          # ONLY THE APPROVED COMMIT (2026-11-15). --match-head-commit: GitHub merges the branch only while its head is
+          # the commit the owner approved. A branch that moved after the check above (a repair finishing, a restage) is
+          # not merged and not marked failed: "moved" is read by the steps below, the refusal is recorded, and the
+          # platform hands the preview back to its owner.
+          [[ "$APPROVED" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::No approved commit to publish."; exit 1; }
           fault() { printf '%s' "$1" | grep -qiE 'HTTP 5[0-9][0-9]|status code: 5[0-9][0-9]|Bad Gateway|Server Error|Something went wrong|timed out|timeout|already in progress|rate limit'; }
           attempt=1
-          until answer=$(gh pr merge "$BRANCH" --squash --delete-branch 2>&1); do
+          until answer=$(gh pr merge "$BRANCH" --squash --delete-branch --match-head-commit "$APPROVED" 2>&1); do
             echo "$answer"
-            state=$(gh pr view "$BRANCH" --json state --jq .state 2>/dev/null) || state=unread
+            read -r state head <<< "$(gh pr view "$BRANCH" --json state,headRefOid --jq '.state + " " + .headRefOid' 2>/dev/null || echo unread)"
             if [ "$state" = MERGED ]; then echo "The pull request is merged, in spite of that answer."; answer=""; break; fi
+            if [ "$state" = OPEN ] && [ -n "$head" ] && [ "$head" != "$APPROVED" ]; then
+              { echo "moved=true"; echo "head=$head"; } >> "$GITHUB_OUTPUT"
+              echo "::error::Not published: the change's branch moved to $head after its owner approved $APPROVED. It stays approved; its owner is shown the preview again."
+              exit 1
+            fi
             fault "$answer" || exit 1
             if [ "$attempt" -ge 4 ]; then
               echo "refused=true" >> "$GITHUB_OUTPUT"
@@ -214,10 +255,24 @@ jobs:
           CHANGED_FILES: ${{ steps.change.outputs.files }}
           CHANGE_SUMMARY: ${{ steps.change.outputs.summary }}
         run: node scripts/managed-site/record-change.mjs deployed
-      # Not when GitHub refused the merge: nothing about the change failed, and a request marked failed is not
-      # started again by the publish recovery (it reads approved requests that are still preview_ready).
+      - name: Record a branch that moved
+        if: ${{ failure() && steps.merge.outputs.moved == 'true' }}
+        env:
+          REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
+          REFUSAL: branch_moved
+          APPROVED_COMMIT: ${{ needs.find-request.outputs.approved_commit }}
+          BRANCH_HEAD: ${{ steps.merge.outputs.head }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        # This checkout is the change, and a change made before this website had this step carries an
+        # update-request.mjs that does not know "refused". The scripts come from the workflow's own commit (main).
+        run: |
+          git checkout -q "$GITHUB_SHA" -- scripts/managed-site
+          node scripts/managed-site/update-request.mjs refused
+      # Not when GitHub refused the merge, or the branch moved: nothing about the change failed, and a request marked
+      # failed is not handed back by the publish recovery (it reads approved requests that are still preview_ready).
       - name: Mark failed
-        if: ${{ failure() && steps.merge.outputs.refused != 'true' }}
+        if: ${{ failure() && steps.merge.outputs.refused != 'true' && steps.merge.outputs.moved != 'true' }}
         env:
           REQUEST_ID: ${{ needs.find-request.outputs.request_id }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

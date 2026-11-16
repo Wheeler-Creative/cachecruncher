@@ -72,3 +72,12 @@ export async function updateRequest(requestId, patch, fetchImpl = fetch) {
 export async function updateBuildsForRequest(requestId, patch, fetchImpl = fetch) {
   return patchRows("site_builds", `?edit_request_id=eq.${encodeURIComponent(requestId)}`, patch, fetchImpl);
 }
+
+export async function insertRow(table, row, fetchImpl = fetch) {
+  const response = await fetchImpl(restUrl(table), {
+    method: "POST",
+    headers: headers({ Prefer: "return=minimal" }),
+    body: JSON.stringify(row)
+  });
+  if (!response.ok) throw new Error(`Unable to add to ${table}: ${await response.text()}`);
+}
