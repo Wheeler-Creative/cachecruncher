@@ -387,7 +387,11 @@ function storeNavigationSettings(snapshot) {
   })).filter((group) => group.items.length);
   return {
     showStore: saved.showStore !== false, label: String(saved.label || "Store"), allLabel: String(saved.allLabel || "All products"),
-    showCart: saved.showCart !== false, cartLabel: String(saved.cartLabel || "Cart"), groups,
+    // A gallery or catalog sells nothing, so it has no cart (storeMode in shop-policy.js).
+    selling: storeMode(snapshot?.storeDisplay) === "shop",
+    showCart: saved.showCart !== false && storeMode(snapshot?.storeDisplay) === "shop", cartLabel: String(saved.cartLabel || "Cart"), groups,
+    // A link of the website's own menu the store's drop-down hangs under, instead of a Store button (storeMenuAt in shop-policy.js).
+    menuAt: typeof saved.menuAt === "string" && saved.menuAt.startsWith("/") && !saved.menuAt.startsWith("//") ? saved.menuAt : "",
     // Snapshots from before order history was opt-in say enabled without the owner choosing it.
     orderHistory: snapshot?.customerOrderHistory?.optIn === true && snapshot.customerOrderHistory.enabled === true
   };
@@ -405,14 +409,15 @@ function storeLinkMarkup(settings, classes) {
   return '<a class="' + classes + '" href="/shop/">' + escapeStoreHtml(settings.label) + '</a>' + storeSubmenuMarkup(settings);
 }
 
-function storeSubmenuMarkup(settings) {
+// attached: under a page of the website's own menu, which is itself the way into the store, so no all-products link.
+function storeSubmenuMarkup(settings, attached) {
   if (!settings.groups.length && !settings.orderHistory) return "";
   const lists = settings.groups.map((group) => '<li class="ww-store-submenu-group">'
     + (group.title ? '<span class="ww-store-submenu-title">' + escapeStoreHtml(group.title) + '</span>' : "")
     + '<ul>' + group.items.map((item) => '<li><a href="' + escapeStoreHtml(item.href) + '">' + escapeStoreHtml(item.label) + '</a></li>').join("") + '</ul></li>').join("");
   const history = settings.orderHistory ? '<li><a class="ww-store-submenu-orders" href="/orders/" data-ww-order-history-link>Order history</a></li>' : "";
   return '<button type="button" class="ww-store-toggle" aria-expanded="false" aria-label="' + escapeStoreHtml("More in " + settings.label) + '"><span aria-hidden="true"></span></button>'
-    + '<ul class="ww-store-submenu"><li><a class="ww-store-submenu-all" href="/shop/">' + escapeStoreHtml(settings.allLabel) + '</a></li>' + lists + history + '</ul>';
+    + '<ul class="ww-store-submenu">' + (attached ? "" : '<li><a class="ww-store-submenu-all" href="/shop/">' + escapeStoreHtml(settings.allLabel) + '</a></li>') + lists + history + '</ul>';
 }
 
 // Store and Cart as items of the site's own menu: wrapped like its other items and carrying their link class.
@@ -446,6 +451,9 @@ async function legacyaddCommerceNavigation(response, env) {
   const configured = snapshot.storeNavigation?.configured === true;
   let menuFound = false, siteHeader = "pending", contentStarted = false, listClaimed = false;
   let storeLinked = !settings.showStore, cartLinked = !settings.showCart;
+  // Under a link of the site's own menu, the store needs no button of its own once that link is found.
+  const menuAt = settings.showStore ? settings.menuAt : "";
+  const atMenuLink = (path) => Boolean(menuAt) && (path.endsWith("/") ? path : path + "/") === menuAt;
   // Order history goes in the first store menu of the header: the platform Store drop-down or the site's own (renamed) store folder.
   let historyPlaced = !settings.orderHistory;
   const withHistory = () => { const current = historyPlaced ? { ...settings, orderHistory: false } : settings; historyPlaced = true; return current; };
@@ -493,10 +501,19 @@ async function legacyaddCommerceNavigation(response, env) {
           if (configured) element.setInnerContent(settings.label);
           element.after(storeSubmenuMarkup(withHistory()), { html: true });
         }
-      } else if (configured && cart) {
+      } else if (cart && (configured || !settings.selling)) {
         if (!settings.showCart) element.replace('<span hidden data-ww-store-hidden></span>', { html: true });
         else if (classes.includes(" ww-cart-nav ") && !classes.includes(" ww-sh-icon ")) element.setInnerContent(cartLinkContent(settings.cartLabel), { html: true });
       }
+    }
+  }).on("header nav a[href], header ul.nav-list a[href], header ul#primary-nav a[href]", {
+    element(element) {
+      if (siteHeader !== "open" || !menuAt) return;
+      const href = String(element.getAttribute("href") || "");
+      if (!href.startsWith("/") || href.startsWith("//") || !atMenuLink(href.split("?")[0].split("#")[0])) return;
+      // Every copy of the link (a phone menu repeats the header's) carries the drop-down; Order history goes in the first.
+      storeLinked = true;
+      element.after(storeSubmenuMarkup(withHistory(), true), { html: true });
     }
   }).on("header ul.nav-submenu", {
     element(element) {
@@ -543,9 +560,11 @@ async function legacyaddCommerceNavigation(response, env) {
 async function legacycommerceRoutes(env) {
   const snapshot = await readCommerceSnapshot(env);
   if (!snapshot?.enabled) return [];
+  // A gallery has no product pages and a catalog nothing to check out (storeMode in shop-policy.js).
+  const mode = storeMode(snapshot.storeDisplay);
   const routes = new Map([["/shop/", { path: "/shop/", name: "Store" }],
-    ["/checkout/", { path: "/checkout/", name: "Checkout" }]]);
-  for (const product of [...(snapshot?.sourceProducts || []), ...(snapshot?.products || [])]) {
+    ...(mode === "shop" ? [["/checkout/", { path: "/checkout/", name: "Checkout" }]] : [])]);
+  for (const product of mode === "gallery" ? [] : [...(snapshot?.sourceProducts || []), ...(snapshot?.products || [])]) {
     const rawPath = String(product.sourcePath || "");
     if (!rawPath.startsWith("/") || rawPath.startsWith("//")) continue;
     try {
@@ -568,7 +587,7 @@ async function legacyaddCommerceRoutesToManifest(response, env) {
   for (const route of storeRoutes) {
     if (!routes.has(route.path)) routes.set(route.path, { ...route, purpose: "Managed product detail" });
   }
-  if (storeRoutes.length && !routes.has("/cart/")) {
+  if (storeRoutes.some((route) => route.path === "/checkout/") && !routes.has("/cart/")) {
     routes.set("/cart/", { path: "/cart/", name: "Cart", purpose: "Review your selected products" });
   }
   for (const route of eventDetailRoutes(await readEventSnapshot(env))) {
@@ -588,7 +607,7 @@ async function legacyaddCommerceRoutesToSitemap(body, env, origin) {
     try { return new URL(match[1], origin).pathname; } catch { return ""; }
   }));
   const storeRoutes = await commerceRoutes(env);
-  const routes = [...storeRoutes, ...(storeRoutes.length ? [{ path: "/cart/", name: "Cart" }] : []),
+  const routes = [...storeRoutes, ...(storeRoutes.some((route) => route.path === "/checkout/") ? [{ path: "/cart/", name: "Cart" }] : []),
     ...eventDetailRoutes(await readEventSnapshot(env))];
   if (!routes.length) return String(body);
   const additions = routes.filter((route) => !known.has(route.path)).map((route) => {
@@ -629,6 +648,7 @@ function projectShopCatalog(snapshot, params) {
     for (const value of categoriesOf(row)) categories.set(value, { value, label: row.catalog?.categories?.find((item) => (item.path || item.label) === value)?.label || value });
   }
   const layout = storeCardLayout(snapshot.storeDisplay);
+  const gallery = storeMode(snapshot.storeDisplay) === "gallery";
   // Cards that show pre-order dates let shoppers pick one of the order-by days still to come.
   const today = new Date().toISOString().slice(0, 10);
   const cutoffDates = layout.parts.includes("dates") ? [...new Set(rows.map(row => productCutoffDay(row, snapshot.collectionTimeZone || "UTC")).filter(day => day && day >= today))].sort().slice(0, 30) : [];
@@ -712,9 +732,11 @@ function projectShopCatalog(snapshot, params) {
     return { priceRanges: [...currencies].map(([currency, values]) => ({ currency, low: Math.min(...values), high: Math.max(...values) })),
       id: row.id, sourceKey: row.sourceKey, sourcePath: row.sourcePath, categoryPath: row.categoryPath,
       title: row.title, imageUrl: row.imageUrl || row.catalog?.images?.[0]?.url,
-      ...(layout.parts.includes("summary") && row.description ? { summary: (() => {
+      // A gallery has no product pages, so its cards carry the whole description, not the first few words.
+      ...((gallery || layout.parts.includes("summary")) && row.description ? { summary: (() => {
         const text = String(row.description).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-        return text.length > 160 ? text.slice(0, 160).replace(/\s+\S*$/, "") + "…" : text;
+        const most = gallery ? 1200 : 160;
+        return text.length > most ? text.slice(0, most).replace(/\s+\S*$/, "") + "…" : text;
       })() } : {}),
       priceAmount: amounts.length ? Math.min(...amounts) : null,
       ...(layout.details.length ? { details: Object.fromEntries(layout.details.map((name) => [name, [].concat(attributesOf(row)[name] ?? []).map(String).filter(Boolean)]).filter(([, values]) => values.length)) } : {}),
@@ -845,6 +867,9 @@ async function serveCommerceProductPage(request, env, pathname) {
     return sourcePath && (sourcePath.endsWith("/") ? sourcePath : sourcePath + "/") === route;
   });
   if (!product) return new Response("Product not found", { status: 404 });
+  // A gallery's products have no pages; a catalog's pages describe the product and sell nothing.
+  const mode = storeMode(snapshot.storeDisplay);
+  if (mode === "gallery") return notFoundPage(env, new URL(request.url), new Response("Product not found", { status: 404 }));
   const image = product.imageUrl || product.catalog?.images?.[0]?.url || "";
   const available = product.active && product.purchasable;
   // Sold in the shop only (catalog.inStoreOnly): never on sale online. Said with where to find the shop before any
@@ -860,17 +885,18 @@ async function serveCommerceProductPage(request, env, pathname) {
     ...(product.priceAmount != null ? { offers: { "@type": "Offer", url: new URL(request.url).origin + route,
       priceCurrency: product.currency,
       price: product.priceAmount / (10 ** new Intl.NumberFormat("en", { style: "currency", currency: product.currency }).resolvedOptions().maximumFractionDigits),
-      availability: "https://schema.org/" + (inStore ? "InStoreOnly" : available ? product.catalog?.saleType === "preorder" ? "PreOrder" : "InStock" : "OutOfStock") } } : {}) };
+      ...(mode === "shop" ? { availability: "https://schema.org/" + (inStore ? "InStoreOnly" : available ? product.catalog?.saleType === "preorder" ? "PreOrder" : "InStock" : "OutOfStock") } : {}) } } : {}) };
   const publicationLabels = { publisher: "Publisher", format: "Format", writer: "Writer", artist: "Artist", coverArtist: "Cover artist", series: "Series", issueNumber: "Issue / volume", rating: "Rating", variantDescription: "Cover variant", numberOfPages: "Pages" };
   const specs = product.catalog?.specs || [];
   const publicationMarkup = specs.length ? '<dl class="ww-store-publication ww-store-specs">' + specs.map((spec) => '<dt>' + escapeStoreHtml(spec.label) + '</dt><dd>' + escapeStoreHtml(spec.value) + '</dd>').join("") + '</dl>'
     : product.catalog?.showPublicationFacts ? '<dl class="ww-store-publication">' + Object.entries(publicationLabels)
     .filter(([key]) => product.catalog.publication?.[key]).map(([key, label]) => '<dt>' + label + '</dt><dd>' + escapeStoreHtml(product.catalog.publication[key]) + '</dd>').join("") + '</dl>' : "";
-  const main = '<article class="ww-product-detail" data-ww-behavior="commerce-store" data-ww-product-detail data-ww-detail-layout="' + productImageLayout(product.catalog, snapshot.storeDisplay) + '">'
+  const main = '<article class="ww-product-detail" data-ww-behavior="commerce-store" data-ww-product-detail data-ww-detail-layout="' + productImageLayout(product.catalog, snapshot.storeDisplay) + '"'
+    + (mode === "shop" ? "" : ' data-ww-store-mode="' + mode + '"') + '>'
     + '<h1>' + escapeStoreHtml(product.title) + '</h1>' + storePriceMarkup([product]) + '<p class="ww-store-description">' + escapeStoreHtml(product.description) + '</p>'
     + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + escapeStoreHtml(product.title) + '" loading="eager">' : '')
     + (product.catalog?.releaseAt ? '<p>Expected release: <time datetime="' + escapeStoreHtml(product.catalog.releaseAt) + '">' + escapeStoreHtml(product.catalog.releaseDate || product.catalog.releaseAt.slice(0, 10)) + '</time></p>' : '')
-    + publicationMarkup + '<p role="status" aria-live="polite">' + status + '</p></article>' + storePolicyLinks(snapshot)
+    + publicationMarkup + (mode === "shop" ? '<p role="status" aria-live="polite">' + status + '</p>' : '') + '</article>' + storePolicyLinks(snapshot)
     + '<script type="application/ld+json">' + JSON.stringify(schema).replace(/</g, "\\u003c") + '</script>';
   return commercePage(product.title || "Product", main, env, new URL(request.url), product.description);
 }
@@ -903,6 +929,7 @@ async function serveStorePolicy(request, env, url, snapshot) {
 async function serveCommerceCart(env, url) {
   const snapshot = await readCommerceSnapshot(env);
   if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
+  if (storeMode(snapshot.storeDisplay) !== "shop") return notFoundPage(env, url, new Response("Page not found", { status: 404 }));
   const main = '<section class="ww-cart" data-ww-behavior="commerce-store" data-ww-cart>'
     + '<h1>Your cart</h1><p role="status" aria-live="polite">Loading cart…</p></section>' + storePolicyLinks(snapshot);
   return commercePage("Your cart", main, env, url);
@@ -940,7 +967,10 @@ async function serveCommerceShop(env, url) {
   const columns = [2, 3, 4, 5, 6].includes(display.columns) ? display.columns : 0;
   const style = (columns ? '--ww-store-columns:' + columns + ';--ww-store-columns-md:' + Math.min(columns, 3) + ';' : "")
     + (ratio ? '--ww-store-ratio:' + ratio + ';' : "") + '--ww-store-fit:' + (display.photoFit === "fill" ? "cover" : "contain");
+  const mode = storeMode(display);
   const attributes = { "data-ww-store-display": "", "data-ww-store-fit": "", ...(display.photoShape === "natural" ? { "data-ww-store-natural": "" } : {}),
+    // Gallery or catalog, said where the store's stylesheet, its script and the platform's runtime check read it.
+    ...(mode === "shop" ? {} : { "data-ww-store-mode": mode }),
     ...(cardStyle ? { "data-ww-store-cards": cardStyle } : {}), ...(columns ? { "data-ww-product-columns": String(columns) } : {}),
     ...(ratio ? { "data-ww-product-image-ratio": ratio } : {}),
     // The owner's filter bar layout and look, read by the store's stylesheet before the bar is drawn.
@@ -1026,7 +1056,14 @@ function storeCardMarkup(rows, display, timeZone) {
   const href = escapeStoreHtml(product.sourcePath || "/shop/");
   const title = escapeStoreHtml(product.title || "Product");
   const image = storeImageSource(product, 640);
-  const buyable = rows.some((row) => row.active && row.purchasable);
+  const mode = storeMode(display);
+  // A gallery card is the photo, the name and the description, with nowhere to go: its products have no pages.
+  if (mode === "gallery") return '<article class="ww-store-card"><div class="ww-store-image-link">'
+    + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + (cards === "photo" ? "" : title) + '" loading="lazy">' : storeBlankPicture())
+    + '</div><h2 class="ww-store-title' + (cards === "photo" ? ' ww-store-visually-hidden' : '') + '">' + title + '</h2>'
+    + (cards !== "photo" && product.summary ? '<p class="ww-store-summary">' + escapeStoreHtml(product.summary) + '</p>' : '') + '</article>';
+  // A catalog sells nothing: each card opens its product, with the price only when one is set.
+  const buyable = mode === "catalog" || rows.some((row) => row.active && row.purchasable);
   if (cards === "photo") return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" aria-label="' + title + '" title="' + title + '">'
     + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="" loading="lazy">' : storeBlankPicture())
@@ -1053,6 +1090,7 @@ function storeCardMarkup(rows, display, timeZone) {
 async function serveCommerceCheckout(env, url) {
   const snapshot = await readCommerceSnapshot(env);
   if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
+  if (storeMode(snapshot.storeDisplay) !== "shop") return notFoundPage(env, url, new Response("Page not found", { status: 404 }));
   if (url.searchParams.has("session_id")) return serveCommerceSuccess(env, url);
   const main = '<section class="ww-checkout" data-ww-behavior="commerce-store" data-ww-cart data-ww-checkout-page>'
     + '<h1>Checkout</h1><p role="status" aria-live="polite">Loading checkout…</p></section>' + storePolicyLinks(snapshot);
@@ -1858,6 +1896,10 @@ function storeCardLayout(display) {
   const details = cards === 'custom' && Array.isArray(display.cardDetails) ? display.cardDetails.filter((name) => typeof name === 'string' && name).slice(0, 6) : [];
   return { cards, parts, details };
 }
+function storeMode(display) {
+  const mode = display && display.mode;
+  return mode === 'gallery' || mode === 'catalog' ? mode : 'shop';
+}
 function readableBannerColors(banner) {
   const TONES = {accent:['#213e52','#ffffff'],neutral:['#eef2f4','#243542'],warm:['#f2e4c8','#41331d']};
   const REQUIRED = 4.5, TARGET = 4.54; // a little over, so a browser's rounding never lands under the rule
@@ -2041,14 +2083,19 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
     params.set("category",group.kind === "category" ? group.categoryPath : "*");
     if(group.kind === "foc")params.set("cutoffDate",group.cutoffDate);
     const listing = projectShopCatalog(snapshot,params);
+    // A gallery's products have no pages of their own: its cards are the photo, the name and the description.
+    const mode = storeMode(snapshot.storeDisplay);
     const cards = [...listing.products || [], ...listing.sourceProducts || []].map(product => {
       const image = product.imageUrl || product.catalog?.images?.[0]?.url;
       const title = escapeStoreHtml(product.title);
       const path = escapeStoreHtml(product.sourcePath || "/shop/");
+      const picture = image ? '<img class="ww-store-image" src="'+escapeStoreHtml(image)+'" alt="'+title+'" loading="lazy">' : '';
+      if (mode === "gallery") return '<article class="ww-store-card">'+picture+'<h2>'+title+'</h2>'+(product.summary ? '<p class="ww-store-summary">'+escapeStoreHtml(product.summary)+'</p>' : '')+'</article>';
       let price = ""; try { if (product.priceAmount != null) price = new Intl.NumberFormat("en",{style:"currency",currency:product.currency}).format(product.priceAmount / 10 ** new Intl.NumberFormat("en",{style:"currency",currency:product.currency}).resolvedOptions().maximumFractionDigits); } catch {}
-      return '<article class="ww-store-card"><a href="'+path+'">'+(image ? '<img class="ww-store-image" src="'+escapeStoreHtml(image)+'" alt="'+title+'" loading="lazy">' : '')+'<h2>'+title+'</h2></a><p>'+escapeStoreHtml(price)+'</p></article>';
+      return '<article class="ww-store-card"><a href="'+path+'">'+picture+'<h2>'+title+'</h2></a>'+(price ? '<p>'+escapeStoreHtml(price)+'</p>' : '')+'</article>';
     }).join("");
-    return commercePage(group.title, '<section class="ww-product-section"><h1>'+escapeStoreHtml(group.title)+'</h1><p>'+listing.pagination.total+' products</p><div data-ww-behavior="commerce-store" data-ww-product-list '+attributes+' aria-live="polite"><div class="ww-store-grid">'+cards+'</div></div></section>',env,url);
+    const modeAttribute = mode === "shop" ? "" : ' data-ww-store-mode="'+mode+'"';
+    return commercePage(group.title, '<section class="ww-product-section"><h1>'+escapeStoreHtml(group.title)+'</h1><p>'+listing.pagination.total+' products</p><div data-ww-behavior="commerce-store" data-ww-product-list '+attributes+modeAttribute+' aria-live="polite"><div class="ww-store-grid">'+cards+'</div></div></section>',env,url);
   }
 
   async function rewriteShopCollectionLinks(response, env) {

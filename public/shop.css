@@ -82,6 +82,7 @@ li:has(>.ww-store-toggle).is-open>.ww-store-submenu,li:has(>.ww-store-toggle)>.w
 .ww-store-save{min-height:2.75rem;padding:.65rem 1rem;margin:.4rem .5rem 0 0;cursor:pointer}.ww-store-save[aria-pressed="true"]{font-weight:600}
 .ww-store-saved{margin-top:2rem}.ww-store-saved h2{font-size:1.25rem}.ww-store-saved .ww-store-title{font-size:1rem;margin:0}
 .ww-store-summary{margin:.25rem 0 .5rem;font-size:.92rem;line-height:1.45;opacity:.85;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+[data-ww-store-mode="gallery"] .ww-store-summary{display:block;-webkit-line-clamp:unset;overflow:visible}
 .ww-commerce-main:has([data-ww-detail-layout="lux"]){max-width:1400px!important}
 .ww-store-gallery[data-presentation="lux"]{display:grid;gap:.75rem;max-width:none}.ww-store-lux-photo{display:block;width:100%;padding:0;border:0;background:none;cursor:zoom-in}.ww-store-lux-photo .ww-store-image{width:100%;height:auto;aspect-ratio:auto;object-fit:contain}
 [data-ww-detail-layout="lux"] .ww-store-info h1{font-size:clamp(1.5rem,2.6vw,2.2rem)}[data-ww-detail-layout="lux"] .ww-store-info{font-size:.95rem;min-width:0}
