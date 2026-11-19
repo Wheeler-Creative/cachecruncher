@@ -1,22 +1,17 @@
-// Cache Calc — client-side bidirectional solver.
-// Every input field carries one of three states: 'empty', 'user', 'auto'.
-// Each user edit gets a monotonically-increasing recency stamp. A derivation
-// rule can only overwrite a target field if at least one of its inputs has a
-// higher recency than the target — i.e. "the value you most recently typed
-// always wins". This is what makes both sides of an equation editable.
+// Cache Cruncher: the page. The math (rules, working, simulator, link parsing) is /solver.js, loaded before
+// this file and shared with the JSON API. This file is the form, the pictures and the simulator's controls.
+//
+// Every input is 'empty', 'user' (the visitor typed it) or 'auto' (worked out). Each edit gets a rising stamp.
+// Everything shown is derived from the typed values only, newest edit first: when two typed values cannot both
+// be true the more recent one wins, and the older one is replaced once the visitor leaves the box they are in.
 
 (() => {
-  // ─────────────────────────────── constants ───────────────────────────────
-  // The solver (field list, rules, number formatting) is /solver.js, loaded before this file and shared with
-  // the JSON API. FIELDS maps each input id to { kind, unitId }: `kind: 'size'` is paired with a unit selector
-  // and stored internally in bytes; `kind: 'int'` is a plain integer (bits / counts). Values are always held
-  // in canonical units regardless of the unit the visitor selects.
   const Solver = globalThis.CacheCruncherSolver;
   if (!Solver) {
     console.error('Cache Cruncher: /solver.js did not load, so the calculator cannot start.');
     return;
   }
-  const { UNITS, FIELDS, isPow2, ilog2 } = Solver;
+  const { UNITS, FIELDS, FIELD_IDS, LABELS, EXTRA_LABELS } = Solver;
 
   const SESSION_VOTED_KEY = 'cachecruncher-feedback-voted';
   const FEEDBACK_TOTALS_CACHE_KEY = 'cachecruncher-feedback-totals';
@@ -27,31 +22,38 @@
   ];
   const feedbackCounts = Object.fromEntries(FEEDBACK_TYPES.map(({ id }) => [id, 0]));
   let feedbackTotal = 0;
-  const SIMULATOR_TRACE_LIMIT = 12;
 
-  const simulator = {
-    configKey: '',
-    lines: [],
-    tlb: [],
-    replacement: [],
-    trace: [],
-    accessCount: 0,
-    lastAccess: null,
-  };
+  // A cache this small is drawn whole; a bigger one shows only the sets that have been touched.
+  const TABLE_ROWS_SHOWN_WHOLE = 256;
 
   // ─────────────────────────────── state ───────────────────────────────────
   const state = {};      // id -> 'empty' | 'user' | 'auto'
-  const editedAt = {};   // id -> recency counter
+  const editedAt = {};   // id -> recency stamp of the visitor's last edit
+  const unitOf = {};     // unit selector id -> the unit its number is currently shown in
+  const unitPicked = {}; // unit selector id -> true once the visitor chose the unit themselves
+  const unitDefault = {}; // unit selector id -> the unit the page starts with
   let recencyCounter = 0;
-  let activeId = null;   // id currently focused (never overwritten by solver)
+  let activeId = null;   // the input being typed in (never rewritten under the cursor)
+  let commitPending = false; // a box was left: typed values that lost to newer ones now give way
+  let adjustments = [];  // what that changed, shown until the next edit
+  let linkProblem = '';  // why a link's values could not be read
+  let lastQuery = null;
 
-  for (const id of Object.keys(FIELDS)) {
+  const sim = { key: '', core: null, trace: [], message: '' };
+
+  for (const id of FIELD_IDS) {
     state[id] = 'empty';
     editedAt[id] = 0;
   }
 
   // ─────────────────────────────── helpers ─────────────────────────────────
   const $ = (id) => document.getElementById(id);
+  const make = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  };
 
   function scrollActiveRowIntoView(container) {
     if (!container) return;
@@ -69,36 +71,31 @@
 
   function readField(id) {
     const f = FIELDS[id];
-    const el = $(id);
-    const raw = el.value.trim();
+    const raw = $(id).value.trim();
     if (raw === '') return null;
     const n = Number(raw);
     if (!Number.isFinite(n) || n < 0) return null;
-    if (f.kind === 'size') {
-      const unit = $(f.unitId).value;
-      return n * UNITS[unit];
-    }
-    return n;
+    return f.kind === 'size' ? n * UNITS[$(f.unitId).value] : n;
   }
 
   function writeField(id, canonical) {
     if (id === activeId) return false; // never overwrite focused input
     const f = FIELDS[id];
-    const el = $(id);
+    const input = $(id);
     let display;
     if (canonical === null || canonical === undefined || !Number.isFinite(canonical)) {
       display = '';
     } else if (f.kind === 'size') {
-      const unit = $(f.unitId).value;
-      const v = canonical / UNITS[unit];
-      display = formatNum(v);
+      // A worked-out size is shown in the unit that reads best (4 GB, not 4194304 KB) unless the visitor chose one.
+      if (!unitPicked[f.unitId]) setUnit(f.unitId, Solver.splitSize(canonical).unit);
+      display = formatNum(canonical / UNITS[$(f.unitId).value]);
     } else {
       display = formatNum(canonical);
     }
-    if (el.value === display) return false;
-    el.value = display;
     state[id] = display === '' ? 'empty' : 'auto';
-    el.classList.toggle('auto-filled', state[id] === 'auto');
+    input.classList.toggle('auto-filled', state[id] === 'auto');
+    if (input.value === display) return false;
+    input.value = display;
     return true;
   }
 
@@ -107,20 +104,13 @@
     return Number(n.toFixed(6)).toString();
   }
 
-  function readAll() {
-    const v = {};
-    for (const id of Object.keys(FIELDS)) v[id] = readField(id);
-    return v;
+  function setUnit(unitId, unit) {
+    $(unitId).value = unit;
+    unitOf[unitId] = unit;
   }
 
   function formatFeedbackSummary() {
     return `${feedbackTotal} interactions · ${FEEDBACK_TYPES.map(({ id, emoji }) => `${emoji} ${feedbackCounts[id]}`).join(' · ')}`;
-  }
-
-  function intValue(value) {
-    if (!Number.isFinite(value)) return null;
-    const rounded = Math.round(value);
-    return Math.abs(value - rounded) < 1e-9 ? rounded : null;
   }
 
   function escapeHtml(value) {
@@ -136,498 +126,23 @@
     return `0x${Math.max(0, value).toString(16).toUpperCase()}`;
   }
 
-  function isUsableSimulatorConfig(v) {
-    const blockSize = intValue(v.block_size);
-    const numSets = intValue(v.num_sets);
-    const associativity = intValue(v.associativity);
-    const addressSize = intValue(v.address_size);
-    const numBlocks = intValue(v.num_blocks);
-    if (!blockSize || !numSets || !associativity || !addressSize || !numBlocks) return false;
-    if (!isPow2(blockSize) || !isPow2(numSets)) return false;
-    if (numBlocks !== numSets * associativity) return false;
-    return addressSize > 0;
-  }
-
-  function getSimulatorConfig(v) {
-    if (!isUsableSimulatorConfig(v)) return null;
-    const pageSize = intValue(v.pagesize);
-    const virtualAddressSize = intValue(v.virtual_address_size);
-    const tlbRows = intValue(v.tlb_rows);
-    const pageOffsetBits = pageSize && isPow2(pageSize) ? ilog2(pageSize) : null;
-    const physicalPages = pageSize && intValue(v.addressable_memory)
-      ? intValue(v.addressable_memory) / pageSize
-      : null;
-    const vpnBits = virtualAddressSize != null && pageOffsetBits != null
-      ? virtualAddressSize - pageOffsetBits
-      : null;
-    return {
-      blockSize: intValue(v.block_size),
-      numSets: intValue(v.num_sets),
-      associativity: intValue(v.associativity),
-      addressSize: intValue(v.address_size),
-      numBlocks: intValue(v.num_blocks),
-      offsetBits: intValue(v.offset_bits) ?? ilog2(intValue(v.block_size)),
-      indexBits: intValue(v.index_bits) ?? ilog2(intValue(v.num_sets)),
-      tagBits: intValue(v.tag_bits),
-      memoryBytes: intValue(v.addressable_memory) ?? (2 ** intValue(v.address_size)),
-      pageSize,
-      pageOffsetBits,
-      physicalPages: intValue(physicalPages),
-      virtualAddressSize,
-      vpnBits: intValue(vpnBits),
-      tlbRows,
-    };
-  }
-
-  function supportsVirtualTranslation(config) {
-    return Boolean(
-      config
-      && config.pageSize
-      && config.pageOffsetBits != null
-      && config.physicalPages
-      && config.virtualAddressSize
-      && config.vpnBits != null,
-    );
-  }
-
-  function getConfigKey(config) {
-    return JSON.stringify(config);
-  }
-
-  function ensureSimulator(config) {
-    const key = getConfigKey(config);
-    if (simulator.configKey === key) return;
-    simulator.configKey = key;
-    simulator.lines = Array.from({ length: config.numSets }, () =>
-      Array.from({ length: config.associativity }, (_, way) => ({
-        way,
-        valid: false,
-        tag: null,
-        blockNumber: null,
-        baseAddress: null,
-        dirty: false,
-        lastUsed: 0,
-      })),
-    );
-    simulator.tlb = config.tlbRows && isPow2(config.tlbRows)
-      ? Array.from({ length: config.tlbRows }, (_, index) => ({
-          index,
-          valid: false,
-          tag: null,
-          vpn: null,
-          physicalPage: null,
-        }))
-      : [];
-    simulator.replacement = Array.from({ length: config.numSets }, () => 0);
-    simulator.trace = [];
-    simulator.accessCount = 0;
-    simulator.lastAccess = null;
-  }
-
-  function resetSimulator() {
-    simulator.configKey = '';
-    simulator.lines = [];
-    simulator.tlb = [];
-    simulator.replacement = [];
-    simulator.trace = [];
-    simulator.accessCount = 0;
-    simulator.lastAccess = null;
-  }
-
-  function clearSimulatorTrace(config) {
-    if (!config) {
-      resetSimulator();
-      return;
+  // What the visitor typed (in canonical units), and which of it is newest.
+  function typedValues() {
+    const typed = {};
+    for (const id of FIELD_IDS) {
+      if (state[id] !== 'user') continue;
+      const value = readField(id);
+      if (value != null) typed[id] = value;
     }
-    simulator.configKey = '';
-    ensureSimulator(config);
+    const newestFirst = Object.keys(typed).sort((a, b) => editedAt[b] - editedAt[a]);
+    return { typed, newestFirst };
   }
+  const settleNow = () => {
+    const { typed, newestFirst } = typedValues();
+    return Solver.settle(typed, newestFirst);
+  };
 
-  function parseAddressInput(raw, bitWidth) {
-    const text = raw.trim();
-    if (!text) return null;
-    const value = /^0x/i.test(text) ? Number.parseInt(text, 16) : Number.parseInt(text, 10);
-    if (!Number.isFinite(value) || value < 0) return null;
-    const maxAddress = (2 ** bitWidth) - 1;
-    if (value > maxAddress) return null;
-    return value;
-  }
-
-  function resolveAccess(inputAddress, mode, config) {
-    if (mode === 'virtual') {
-      ensureSimulator(config);
-      const vpn = Math.floor(inputAddress / config.pageSize);
-      const pageOffset = inputAddress % config.pageSize;
-      const tlbIndex = config.tlbRows && isPow2(config.tlbRows) ? vpn % config.tlbRows : null;
-      const tlbTag = config.tlbRows && isPow2(config.tlbRows) ? Math.floor(vpn / config.tlbRows) : null;
-      const tlbEntry = tlbIndex != null ? simulator.tlb[tlbIndex] : null;
-      const tlbHit = Boolean(tlbEntry && tlbEntry.valid && tlbEntry.tag === tlbTag);
-      const physicalPage = tlbHit ? tlbEntry.physicalPage : (vpn % config.physicalPages);
-      if (tlbEntry && !tlbHit) {
-        tlbEntry.valid = true;
-        tlbEntry.tag = tlbTag;
-        tlbEntry.vpn = vpn;
-        tlbEntry.physicalPage = physicalPage;
-      }
-      const physicalAddress = (physicalPage * config.pageSize) + pageOffset;
-      return {
-        mode,
-        inputAddress,
-        virtualAddress: inputAddress,
-        vpn,
-        pageOffset,
-        physicalPage,
-        physicalAddress,
-        tlbIndex,
-        tlbTag,
-        tlbHit,
-        translationNote: `Demo translation uses VPN mod physical pages (${config.physicalPages}) after a direct-mapped TLB lookup.`,
-      };
-    }
-
-    return {
-      mode: 'physical',
-      inputAddress,
-      physicalAddress: inputAddress,
-    };
-  }
-
-  function simulateAccess(address, config, translation, operation = 'read') {
-    ensureSimulator(config);
-    const blockNumber = Math.floor(address / config.blockSize);
-    const setIndex = blockNumber % config.numSets;
-    const tag = Math.floor(blockNumber / config.numSets);
-    const offset = address % config.blockSize;
-    const set = simulator.lines[setIndex];
-    let line = set.find((entry) => entry.valid && entry.tag === tag);
-    let outcome = 'Hit';
-    let evicted = null;
-    if (!line) {
-      outcome = 'Miss';
-      line = set.find((entry) => !entry.valid);
-      if (!line) {
-        line = set[simulator.replacement[setIndex] % set.length];
-        simulator.replacement[setIndex] = (simulator.replacement[setIndex] + 1) % set.length;
-        evicted = { dirty: line.dirty, blockNumber: line.blockNumber, tag: line.tag };
-      }
-      line.valid = true;
-      line.tag = tag;
-      line.blockNumber = blockNumber;
-      line.baseAddress = blockNumber * config.blockSize;
-      line.dirty = false;
-    }
-    simulator.accessCount += 1;
-    line.lastUsed = simulator.accessCount;
-    if (operation === 'write') {
-      line.dirty = true;
-    }
-    const access = {
-      address,
-      inputAddress: translation?.inputAddress ?? address,
-      mode: translation?.mode ?? 'physical',
-      operation,
-      virtualAddress: translation?.virtualAddress ?? null,
-      vpn: translation?.vpn ?? null,
-      pageOffset: translation?.pageOffset ?? null,
-      physicalPage: translation?.physicalPage ?? null,
-      tlbIndex: translation?.tlbIndex ?? null,
-      tlbTag: translation?.tlbTag ?? null,
-      tlbHit: translation?.tlbHit ?? null,
-      translationNote: translation?.translationNote ?? '',
-      blockNumber,
-      setIndex,
-      tag,
-      offset,
-      way: line.way,
-      outcome,
-      dirty: line.dirty,
-      evicted,
-      baseAddress: blockNumber * config.blockSize,
-      bytes: Array.from({ length: Math.min(config.blockSize, 8) }, (_, index) => blockNumber * config.blockSize + index),
-    };
-    simulator.lastAccess = access;
-    simulator.trace.unshift(access);
-    simulator.trace = simulator.trace.slice(0, SIMULATOR_TRACE_LIMIT);
-    return access;
-  }
-
-  function renderTranslation(access, config) {
-    const el = $('simTranslation');
-    if (!access || !config) {
-      el.className = 'bit-breakdown empty-state';
-      el.textContent = 'No address translation yet.';
-      return;
-    }
-
-    const cells = access.mode === 'virtual'
-      ? [
-          ['Operation', access.operation.toUpperCase()],
-          ['Virtual', toHex(access.virtualAddress)],
-          ['VPN', String(access.vpn)],
-          ['Page Offset', String(access.pageOffset)],
-          ['Physical Frame', String(access.physicalPage)],
-          ['Physical', toHex(access.address)],
-          ['TLB', access.tlbIndex != null && access.tlbTag != null ? `${access.tlbHit ? 'hit' : 'miss'} · index ${access.tlbIndex} · tag ${access.tlbTag}` : 'Not configured'],
-        ]
-      : [
-          ['Operation', access.operation.toUpperCase()],
-          ['Physical', toHex(access.address)],
-          ['Block', String(access.blockNumber)],
-          ['Set', String(access.setIndex)],
-          ['Offset', String(access.offset)],
-        ];
-
-    el.className = 'bit-breakdown translation-grid';
-    el.innerHTML = cells.map(([label, value]) => `<div class="bit-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-    if (access.translationNote) {
-      el.innerHTML += `<div class="translation-note">${escapeHtml(access.translationNote)}</div>`;
-    }
-  }
-
-  function renderBreakdown(access, config) {
-    const el = $('simBreakdown');
-    if (!access || !config) {
-      el.className = 'bit-breakdown empty-state';
-      el.textContent = 'No access yet.';
-      return;
-    }
-    const binary = access.address.toString(2).padStart(config.addressSize, '0');
-    const tagBits = binary.slice(0, config.tagBits || 0) || '—';
-    const indexBits = binary.slice(config.tagBits || 0, (config.tagBits || 0) + config.indexBits) || '—';
-    const offsetBits = binary.slice(binary.length - config.offsetBits) || '—';
-    el.className = 'bit-breakdown';
-    el.innerHTML = [
-      ['Op', access.operation.toUpperCase()],
-      ['Tag', tagBits],
-      ['Index', indexBits],
-      ['Offset', offsetBits],
-      ['Result', `${access.outcome} in set ${access.setIndex}, way ${access.way}`],
-      ['Dirty', access.dirty ? '1' : '0'],
-    ].map(([label, value]) => `<div class="bit-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-  }
-
-  function renderAddressChain(access, config) {
-    const el = $('simChain');
-    if (!access || !config) {
-      el.className = 'address-chain empty-state';
-      el.textContent = 'No access yet.';
-      return;
-    }
-
-    const isVirtual = access.mode === 'virtual';
-    const blockBase = access.blockNumber * config.blockSize;
-    const steps = isVirtual
-      ? [
-          ['Virtual address', toHex(access.virtualAddress)],
-          ['VPN', String(access.vpn)],
-          ['TLB', access.tlbIndex != null ? `${access.tlbHit ? 'hit' : 'miss'} · row ${access.tlbIndex}` : 'not used'],
-          ['PPN', String(access.physicalPage)],
-          ['Physical address', toHex(access.address)],
-        ]
-      : [
-          ['Physical address', toHex(access.address)],
-          ['Block', String(access.blockNumber)],
-          ['Set', String(access.setIndex)],
-        ];
-
-    steps.push(
-      ['Cache line', `set ${access.setIndex} · way ${access.way} · ${access.outcome}`],
-      ['Memory block', `${access.blockNumber} · base ${toHex(blockBase)} · ${toHex(blockBase + config.blockSize - 1)}`],
-    );
-
-    el.className = 'address-chain';
-    el.innerHTML = steps.map(([label, value]) => `<div class="chain-step"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-  }
-
-  function renderTrace() {
-    const el = $('simTrace');
-    if (!simulator.trace.length) {
-      el.innerHTML = '<li class="trace-empty">No addresses accessed yet.</li>';
-      return;
-    }
-    el.innerHTML = simulator.trace.map((access) => `
-      <li class="trace-item ${access.outcome.toLowerCase()}">
-        <div><strong>${escapeHtml(`${access.operation.toUpperCase()} ${access.mode === 'virtual' ? `${toHex(access.virtualAddress)} → ${toHex(access.address)}` : toHex(access.address)}`)}</strong> <span>${escapeHtml(access.outcome)}</span></div>
-        <div>set ${access.setIndex} · way ${access.way} · tag ${escapeHtml(toHex(access.tag))} · block ${access.blockNumber}${access.mode === 'virtual' && access.tlbHit != null ? ` · tlb ${access.tlbHit ? 'hit' : 'miss'}` : ''}${access.evicted?.dirty ? ' · write-back' : ''}</div>
-      </li>
-    `).join('');
-  }
-
-  function renderTlbTable(config) {
-    const el = $('simTlbTable');
-    if (!config || !supportsVirtualTranslation(config) || !$('simAddressType') || $('simAddressType').value !== 'virtual') {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'Switch to virtual mode to view TLB activity.';
-      return;
-    }
-    if (!simulator.tlb.length) {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'TLB rows will appear here.';
-      return;
-    }
-    const rows = simulator.tlb.map((entry) => {
-      const current = simulator.lastAccess && simulator.lastAccess.tlbIndex === entry.index;
-      return `
-        <tr class="${current ? 'active-row' : ''}">
-          <td>${entry.index}</td>
-          <td>${entry.valid ? '1' : '0'}</td>
-          <td>${entry.valid ? escapeHtml(toHex(entry.tag)) : '—'}</td>
-          <td>${entry.valid ? entry.vpn : '—'}</td>
-          <td>${entry.valid ? entry.physicalPage : '—'}</td>
-        </tr>
-      `;
-    }).join('');
-    el.className = 'table-shell';
-    el.innerHTML = `<table class="sim-table"><thead><tr><th>Row</th><th>V</th><th>TLB Tag</th><th>VPN</th><th>PPN</th></tr></thead><tbody>${rows}</tbody></table>`;
-    scrollActiveRowIntoView(el);
-  }
-
-  function renderPageTable(config) {
-    const el = $('simPageTable');
-    if (!config || !supportsVirtualTranslation(config) || !$('simAddressType') || $('simAddressType').value !== 'virtual') {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'Switch to virtual mode to view page table mappings.';
-      return;
-    }
-    if (!simulator.lastAccess || simulator.lastAccess.vpn == null) {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'Page table rows will appear here.';
-      return;
-    }
-    const currentVpn = simulator.lastAccess.vpn;
-    const maxVpn = Math.max(0, (2 ** config.vpnBits) - 1);
-    const startVpn = Math.max(0, currentVpn - 2);
-    const endVpn = Math.min(maxVpn, currentVpn + 2);
-    const rows = [];
-    for (let vpn = startVpn; vpn <= endVpn; vpn += 1) {
-      const physicalPage = vpn % config.physicalPages;
-      rows.push(`
-        <tr class="${vpn === currentVpn ? 'active-row' : ''}">
-          <td>${vpn}</td>
-          <td>${physicalPage}</td>
-          <td>${escapeHtml(toHex(physicalPage * config.pageSize))}</td>
-          <td>${vpn === currentVpn ? 'Current VPN' : 'Mapped VPN'}</td>
-        </tr>
-      `);
-    }
-    el.className = 'table-shell';
-    el.innerHTML = `<table class="sim-table"><thead><tr><th>VPN</th><th>PPN</th><th>Base</th><th>Status</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
-  }
-
-  function renderCacheTable(config) {
-    const el = $('simCacheTable');
-    if (!config) {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'Cache table will appear here.';
-      return;
-    }
-    const headers = ['Set', 'Way', 'State', 'Mapping'];
-    const rows = [];
-    simulator.lines.forEach((set, setIndex) => {
-      set.forEach((line) => {
-        const current = simulator.lastAccess && simulator.lastAccess.setIndex === setIndex && simulator.lastAccess.way === line.way;
-        const stateLabel = line.valid ? (current ? 'Active' : (line.dirty ? 'Dirty' : 'Loaded')) : 'Empty';
-        const mapping = line.valid
-          ? `<div class="mapping-cell">
-              <strong>${escapeHtml(toHex(line.tag))}</strong>
-              <span>tag</span>
-              <div class="mapping-meta">block ${line.blockNumber} · base ${escapeHtml(toHex(line.baseAddress))} · dirty ${line.dirty ? '1' : '0'}</div>
-            </div>`
-          : '<div class="mapping-empty">No block loaded yet</div>';
-        rows.push(`
-          <tr class="${current ? 'active-row' : ''}">
-            <td>${setIndex}</td>
-            <td>${line.way}</td>
-            <td><span class="state-badge ${stateLabel.toLowerCase()}">${stateLabel}</span></td>
-            <td>${mapping}</td>
-          </tr>
-        `);
-      });
-    });
-    el.className = 'table-shell';
-    el.innerHTML = `<table class="sim-table"><thead><tr>${headers.map((header) => `<th>${header}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
-    scrollActiveRowIntoView(el);
-  }
-
-  function renderMemoryTable(config) {
-    const el = $('simMemoryTable');
-    if (!config || !simulator.lastAccess) {
-      el.className = 'table-shell empty-state';
-      el.textContent = 'Memory blocks will appear here.';
-      return;
-    }
-    const currentBlock = simulator.lastAccess.blockNumber;
-    const maxBlocks = Math.max(1, Math.floor(config.memoryBytes / config.blockSize));
-    const startBlock = Math.max(0, currentBlock - 2);
-    const endBlock = Math.min(maxBlocks - 1, currentBlock + 2);
-    const rows = [];
-    for (let block = startBlock; block <= endBlock; block += 1) {
-      const base = block * config.blockSize;
-      const bytes = Array.from({ length: Math.min(config.blockSize, 8) }, (_, index) => toHex(base + index)).join(', ');
-      rows.push(`
-        <tr class="${block === currentBlock ? 'active-row' : ''}">
-          <td>${block}</td>
-          <td>${escapeHtml(toHex(base))}</td>
-          <td>${escapeHtml(toHex(base + config.blockSize - 1))}</td>
-          <td>${escapeHtml(bytes)}${config.blockSize > 8 ? ', …' : ''}</td>
-        </tr>
-      `);
-    }
-    el.className = 'table-shell';
-    el.innerHTML = `<table class="sim-table"><thead><tr><th>Block</th><th>Start</th><th>End</th><th>Bytes</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
-  }
-
-  function renderSimulator(v) {
-    const config = getSimulatorConfig(v);
-    const status = $('simStatus');
-    const addBtn = $('simAddBtn');
-    const randomBtn = $('simRandomBtn');
-    const resetBtn = $('simResetBtn');
-    const simInput = $('simAddress');
-
-    if (!config) {
-      resetSimulator();
-      status.textContent = 'Configure power-of-two block size and set count, plus address bits, to unlock the Cache Simulator.';
-      status.className = 'simulator-status';
-      addBtn.disabled = true;
-      randomBtn.disabled = true;
-      resetBtn.disabled = true;
-      simInput.disabled = true;
-      renderBreakdown(null, null);
-      renderTranslation(null, null);
-      renderTrace();
-      renderTlbTable(null);
-      renderPageTable(null);
-      renderCacheTable(null);
-      renderMemoryTable(null);
-      return;
-    }
-
-    const modeEl = $('simAddressType');
-    const virtualSupported = supportsVirtualTranslation(config);
-    modeEl.querySelector('option[value="virtual"]').disabled = !virtualSupported;
-    if (!virtualSupported && modeEl.value === 'virtual') {
-      modeEl.value = 'physical';
-    }
-    const mode = modeEl.value;
-
-    ensureSimulator(config);
-    status.textContent = `${config.associativity}-way cache · ${config.numSets} sets · ${config.blockSize}-byte blocks${mode === 'virtual' ? ' · virtual translation on' : ''}`;
-    status.className = 'simulator-status ready';
-    addBtn.disabled = false;
-    randomBtn.disabled = false;
-    resetBtn.disabled = false;
-    simInput.disabled = false;
-    renderTranslation(simulator.lastAccess, config);
-    renderBreakdown(simulator.lastAccess, config);
-    renderAddressChain(simulator.lastAccess, config);
-    renderTrace();
-    renderTlbTable(config);
-    renderPageTable(config);
-    renderCacheTable(config);
-    renderMemoryTable(config);
-  }
-
+  // ───────────────────────────── feedback ──────────────────────────────────
   function updateFeedbackUI() {
     const summary = document.getElementById('feedbackSummary');
     if (!summary) return;
@@ -738,25 +253,7 @@
     submitFeedback(id);
   }
 
-  // ─────────────────────────────── solver ──────────────────────────────────
-  // The rules and the math live in /solver.js, shared with the JSON API. A field is 'user' when the visitor
-  // typed it, stamped with the recency of that edit; everything else is empty or derived.
-  function solve() {
-    const recency = {};
-    for (const id of Object.keys(FIELDS)) {
-      recency[id] = state[id] === 'user' ? editedAt[id] : -1;
-    }
-    return Solver.solve(readAll(), recency, activeId).values;
-  }
-  const deriveExtras = Solver.deriveExtras;
-
-  // ───────────────────────────── rendering ─────────────────────────────────
-  function renderResults(v, e) {
-    const rows = Solver.resultRows(v, e);
-    paint('cacheResults', rows.cache);
-    paint('memResults', rows.memory);
-  }
-
+  // ───────────────────────────── results ───────────────────────────────────
   function paint(dlId, rows) {
     const dl = $(dlId);
     const prev = dl._prev || {};
@@ -773,36 +270,792 @@
     dl._prev = next;
   }
 
+  // How an address splits up, as a bar whose pieces are as wide as their share of the bits.
+  const PART_CLASS = {
+    'Tag': 'part-tag', 'Index': 'part-index', 'Offset': 'part-offset',
+    'Virtual page number': 'part-tag', 'Page offset': 'part-offset',
+    'TLB tag': 'part-tag', 'TLB index': 'part-index',
+  };
+  function layoutBar(title, parts) {
+    const total = parts.reduce((sum, part) => sum + part.bits, 0);
+    const wrap = make('div', 'layout');
+    const head = make('p', 'layout-title');
+    head.append(make('strong', null, title), make('span', null, ` · ${total} bits`));
+    const bar = make('div', 'layout-bar');
+    bar.tabIndex = 0;
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', `${title}, ${total} bits`);
+    for (const part of parts) {
+      const cell = make('div', `layout-part ${PART_CLASS[part.name] || ''}${part.bits === 0 ? ' zero' : ''}`);
+      cell.style.flexGrow = String(Math.max(part.bits, 1));
+      const range = part.bits === 0 ? 'not used' : part.high === part.low ? `bit ${part.high}` : `bits ${part.high}–${part.low}`;
+      cell.append(
+        make('strong', null, part.name),
+        make('span', 'layout-bits', `${part.bits} ${part.bits === 1 ? 'bit' : 'bits'}`),
+        make('span', 'layout-range', range),
+      );
+      bar.append(cell);
+    }
+    wrap.append(head, bar);
+    return wrap;
+  }
+  function renderLayouts(layouts) {
+    const box = $('addressLayouts');
+    const bars = [];
+    if (layouts.cache) bars.push(layoutBar('Physical address, as the cache reads it', layouts.cache));
+    if (layouts.virtual) bars.push(layoutBar('Virtual address, as the page table reads it', layouts.virtual));
+    if (layouts.tlb) bars.push(layoutBar('Virtual address, as the TLB reads it', layouts.tlb));
+    if (!bars.length) {
+      box.className = 'layouts empty-state';
+      box.textContent = 'Enter a cache and an address size to see how an address splits into tag, index and offset.';
+      return;
+    }
+    box.className = 'layouts';
+    box.replaceChildren(...bars);
+  }
+
+  // Anything the visitor should look at: a value that was replaced, or numbers that are not a real cache.
+  function renderNotes(result) {
+    const box = $('notes');
+    const items = [];
+    if (linkProblem) items.push(['warn', `This link's values could not be read: ${linkProblem}`]);
+    for (const text of adjustments) items.push(['changed', `Updated to match your newer values. ${text}`]);
+    for (const [id, entry] of Object.entries(result.overridden)) {
+      if (state[id] === 'user') items.push(['pending', `${entry.text} It will be replaced when you leave the box you are typing in.`]);
+    }
+    for (const text of result.conflicts) items.push(['warn', text]);
+    for (const text of result.warnings) items.push(['warn', text]);
+    if (!items.length) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    const list = make('ul', 'notes-list');
+    for (const [kind, text] of items) list.append(make('li', `note note-${kind}`, text));
+    box.hidden = false;
+    box.replaceChildren(make('h2', 'notes-title', 'Check these'), list);
+  }
+
+  // The working: each value, the formula behind it and the numbers that went in.
+  function fieldNames(text) {
+    return text.replace(/[a-z_]+/g, (word) => (Object.hasOwn(LABELS, word) ? LABELS[word] : word));
+  }
+  function renderWorking(result) {
+    const box = $('workingSteps');
+    if (!result.steps.length) {
+      box.className = 'working empty-state';
+      box.textContent = 'Enter some values, or try an example above, to see the working.';
+      return;
+    }
+    const nodes = [];
+    const list = make('ol', 'working-list');
+    for (const step of result.steps) {
+      if (step.given) {
+        const given = make('p', 'working-given');
+        given.append(make('strong', null, 'Given: '));
+        step.given.forEach((item, index) => {
+          given.append(`${index ? ', ' : ''}${item.label} = `, make('span', 'working-value', item.value));
+        });
+        nodes.push(given);
+        continue;
+      }
+      const li = make('li');
+      li.append(make('strong', null, step.label), make('span', 'working-eq', ` = ${step.formula}${step.work ? ` = ${step.work}` : ''} = `), make('span', 'working-value', step.result));
+      list.append(li);
+    }
+    if (list.children.length) nodes.push(list);
+    const missing = Object.entries(result.notDetermined);
+    if (missing.length) {
+      const unknown = make('p', 'working-missing');
+      unknown.append(make('strong', null, 'Not worked out yet: '));
+      missing.forEach(([id, needs], index) => {
+        unknown.append(`${index ? '; ' : ''}${LABELS[id] || EXTRA_LABELS[id]} (needs ${fieldNames(needs)})`);
+      });
+      nodes.push(unknown);
+    }
+    box.className = 'working';
+    box.replaceChildren(...nodes);
+  }
+
+  // ───────────────────────────── simulator ─────────────────────────────────
+  function simPolicy() {
+    return $('simPolicy').value;
+  }
+
+  function ensureSimulator(config) {
+    const key = Solver.simKey(config, simPolicy());
+    if (sim.key === key && sim.core) return;
+    sim.key = key;
+    sim.core = Solver.simCreate(config, simPolicy());
+    sim.trace = [];
+    sim.message = '';
+  }
+
+  function resetSimulator() {
+    sim.key = '';
+    sim.core = null;
+    sim.trace = [];
+    sim.message = '';
+  }
+
+  // Why there is no simulator yet, in the visitor's terms.
+  function simulatorBlocker(v) {
+    if (v.block_size == null || v.num_sets == null || v.associativity == null) {
+      return 'Enter a cache (for example its size, block size and associativity) to unlock the Cache Simulator.';
+    }
+    if (v.address_size == null) return 'Add the physical address size (bits) to unlock the Cache Simulator.';
+    if (!Solver.isPow2(v.block_size) || !Solver.isPow2(v.num_sets)) {
+      return 'The Cache Simulator needs a block size and a number of sets that are powers of two.';
+    }
+    if (v.address_size > 53) return 'The Cache Simulator steps through addresses of up to 53 bits.';
+    return 'These values do not describe a cache the simulator can run. Check the notes above.';
+  }
+
+  function renderTranslation(access, config) {
+    const el = $('simTranslation');
+    if (!access || !config) {
+      el.className = 'bit-breakdown empty-state';
+      el.textContent = 'No address translation yet.';
+      return;
+    }
+
+    const cells = access.mode === 'virtual'
+      ? [
+          ['Operation', access.operation.toUpperCase()],
+          ['Virtual', toHex(access.virtualAddress)],
+          ['VPN', String(access.vpn)],
+          ['Page Offset', String(access.pageOffset)],
+          ['Physical Frame', String(access.physicalPage)],
+          ['Physical', toHex(access.address)],
+          ['TLB', access.tlbIndex != null && access.tlbTag != null ? `${access.tlbHit ? 'hit' : 'miss'} · index ${access.tlbIndex} · tag ${access.tlbTag}` : 'Not configured'],
+        ]
+      : [
+          ['Operation', access.operation.toUpperCase()],
+          ['Physical', toHex(access.address)],
+          ['Block', String(access.blockNumber)],
+          ['Set', String(access.setIndex)],
+          ['Offset', String(access.offset)],
+        ];
+
+    el.className = 'bit-breakdown translation-grid';
+    el.innerHTML = cells.map(([label, value]) => `<div class="bit-cell"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+    if (access.mode === 'virtual') {
+      el.innerHTML += `<div class="translation-note">${escapeHtml(`Stand-in page table: virtual page n maps to physical page n mod ${config.physicalPages}, after a direct-mapped TLB lookup.`)}</div>`;
+    }
+  }
+
+  function renderBreakdown(access, config) {
+    const el = $('simBreakdown');
+    if (!access || !config) {
+      el.className = 'bit-breakdown empty-state';
+      el.textContent = 'No access yet.';
+      return;
+    }
+    const binary = access.address.toString(2).padStart(config.addressSize, '0');
+    const tagBits = binary.slice(0, config.tagBits) || '—';
+    const indexBits = binary.slice(config.tagBits, config.tagBits + config.indexBits) || '—';
+    const offsetBits = binary.slice(config.tagBits + config.indexBits) || '—';
+    el.className = 'bit-breakdown';
+    el.innerHTML = [
+      ['Op', access.operation.toUpperCase(), ''],
+      ['Tag', tagBits, 'part-tag'],
+      ['Index', indexBits, 'part-index'],
+      ['Offset', offsetBits, 'part-offset'],
+      ['Result', `${access.outcome} in set ${access.setIndex}, way ${access.way}`, ''],
+      ['Dirty', access.dirty ? '1' : '0', ''],
+    ].map(([label, value, part]) => `<div class="bit-cell ${part}"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  }
+
+  function renderAddressChain(access, config) {
+    const el = $('simChain');
+    if (!access || !config) {
+      el.className = 'address-chain empty-state';
+      el.textContent = 'No access yet.';
+      return;
+    }
+
+    const isVirtual = access.mode === 'virtual';
+    const blockBase = access.blockNumber * config.blockSize;
+    const steps = isVirtual
+      ? [
+          ['Virtual address', toHex(access.virtualAddress)],
+          ['VPN', String(access.vpn)],
+          ['TLB', access.tlbIndex != null ? `${access.tlbHit ? 'hit' : 'miss'} · row ${access.tlbIndex}` : 'not used'],
+          ['PPN', String(access.physicalPage)],
+          ['Physical address', toHex(access.address)],
+        ]
+      : [
+          ['Physical address', toHex(access.address)],
+          ['Block', String(access.blockNumber)],
+          ['Set', String(access.setIndex)],
+        ];
+
+    steps.push(
+      ['Cache line', `set ${access.setIndex} · way ${access.way} · ${access.outcome}`],
+      ['Memory block', `${access.blockNumber} · base ${toHex(blockBase)} · ${toHex(blockBase + config.blockSize - 1)}`],
+    );
+
+    el.className = 'address-chain';
+    el.innerHTML = steps.map(([label, value]) => `<div class="chain-step"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
+  }
+
+  // Every access so far, oldest first: the table a homework question asks for.
+  function renderTrace() {
+    const el = $('simTrace');
+    if (!sim.trace.length) {
+      el.className = 'table-shell trace-shell empty-state';
+      el.textContent = 'No addresses accessed yet.';
+      return;
+    }
+    const virtual = sim.trace.some((access) => access.mode === 'virtual');
+    const rows = sim.trace.map((access, index) => {
+      const address = access.mode === 'virtual' ? `${toHex(access.virtualAddress)} → ${toHex(access.address)}` : toHex(access.address);
+      const replaced = access.evicted
+        ? `block ${access.evicted.blockNumber} (tag ${toHex(access.evicted.tag)})${access.evicted.dirty ? ', written back' : ''}`
+        : '—';
+      const tlb = access.tlbHit == null ? '—' : (access.tlbHit ? 'hit' : 'miss');
+      return `
+        <tr class="${index === sim.trace.length - 1 ? 'active-row' : ''}">
+          <td>${access.number}</td>
+          <td>${access.operation === 'write' ? 'W' : 'R'}</td>
+          <td>${escapeHtml(address)}</td>
+          ${virtual ? `<td>${tlb}</td>` : ''}
+          <td>${escapeHtml(toHex(access.tag))}</td>
+          <td>${access.setIndex}</td>
+          <td>${access.offset}</td>
+          <td><span class="outcome ${access.outcome.toLowerCase()}">${access.outcome}</span></td>
+          <td>${escapeHtml(replaced)}</td>
+        </tr>
+      `;
+    }).join('');
+    const headers = ['#', 'Op', 'Address', ...(virtual ? ['TLB'] : []), 'Tag', 'Set', 'Offset', 'Result', 'Replaced'];
+    el.className = 'table-shell trace-shell';
+    el.innerHTML = `<table class="sim-table trace-table"><thead><tr>${headers.map((header) => `<th scope="col">${header}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderStats() {
+    const el = $('simStats');
+    const stats = sim.core ? sim.core.stats : null;
+    if (!stats || !stats.accesses) {
+      el.textContent = '';
+      return;
+    }
+    const rate = (100 * stats.hits) / stats.accesses;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : (word.endsWith('s') ? 'es' : 's')}`;
+    const parts = [
+      plural(stats.accesses, 'access'),
+      plural(stats.hits, 'hit'),
+      plural(stats.misses, 'miss'),
+      `hit rate ${Number(rate.toFixed(1))}%`,
+      plural(stats.replacements, 'replacement'),
+    ];
+    if (stats.writeBacks) parts.push(plural(stats.writeBacks, 'write-back'));
+    if (stats.tlbHits + stats.tlbMisses) parts.push(`TLB ${plural(stats.tlbHits, 'hit')}, ${plural(stats.tlbMisses, 'miss')}`);
+    el.textContent = parts.join(' · ');
+  }
+
+  function renderAssumptions(config) {
+    const victim = simPolicy() === 'fifo' ? 'the block that was loaded longest ago (FIFO)' : 'the least recently used block (LRU)';
+    const virtual = config && Solver.simSupportsVirtual(config)
+      ? ' The TLB is direct-mapped, and the page table is a stand-in that never page-faults.'
+      : '';
+    $('simAssumptions').textContent = `Addresses are byte addresses. On a miss an empty way is filled first; after that ${victim} is replaced.${virtual}`;
+  }
+
+  function renderTlbTable(config) {
+    const el = $('simTlbTable');
+    if (!config || !Solver.simSupportsVirtual(config) || $('simAddressType').value !== 'virtual') {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Switch to virtual mode to view TLB activity.';
+      return;
+    }
+    if (!config.tlbRows) {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Enter the number of TLB rows (a power of two) to see the TLB.';
+      return;
+    }
+    const whole = config.tlbRows <= TABLE_ROWS_SHOWN_WHOLE;
+    const indexes = whole
+      ? Array.from({ length: config.tlbRows }, (_, index) => index)
+      : [...sim.core.tlb.keys()].sort((a, b) => a - b);
+    const rows = indexes.map((index) => {
+      const entry = sim.core.tlb.get(index);
+      const current = sim.core.last && sim.core.last.tlbIndex === index;
+      return `
+        <tr class="${current ? 'active-row' : ''}">
+          <td>${index}</td>
+          <td>${entry ? '1' : '0'}</td>
+          <td>${entry ? escapeHtml(toHex(entry.tag)) : '—'}</td>
+          <td>${entry ? entry.vpn : '—'}</td>
+          <td>${entry ? entry.physicalPage : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+    el.className = 'table-shell';
+    el.innerHTML = `<table class="sim-table"><thead><tr><th scope="col">Row</th><th scope="col">V</th><th scope="col">TLB Tag</th><th scope="col">VPN</th><th scope="col">PPN</th></tr></thead><tbody>${rows}</tbody></table>${whole ? '' : `<p class="table-note">Showing the ${indexes.length} rows used so far, of ${config.tlbRows}.</p>`}`;
+    scrollActiveRowIntoView(el);
+  }
+
+  function renderPageTable(config) {
+    const el = $('simPageTable');
+    if (!config || !Solver.simSupportsVirtual(config) || $('simAddressType').value !== 'virtual') {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Switch to virtual mode to view page table mappings.';
+      return;
+    }
+    const last = sim.core.last;
+    if (!last || last.vpn == null) {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Page table rows will appear here.';
+      return;
+    }
+    const currentVpn = last.vpn;
+    const maxVpn = Math.max(0, (2 ** config.vpnBits) - 1);
+    const startVpn = Math.max(0, currentVpn - 2);
+    const endVpn = Math.min(maxVpn, currentVpn + 2);
+    const rows = [];
+    for (let vpn = startVpn; vpn <= endVpn; vpn += 1) {
+      const physicalPage = vpn % config.physicalPages;
+      rows.push(`
+        <tr class="${vpn === currentVpn ? 'active-row' : ''}">
+          <td>${vpn}</td>
+          <td>${physicalPage}</td>
+          <td>${escapeHtml(toHex(physicalPage * config.pageSize))}</td>
+          <td>${vpn === currentVpn ? 'Current VPN' : 'Mapped VPN'}</td>
+        </tr>
+      `);
+    }
+    el.className = 'table-shell';
+    el.innerHTML = `<table class="sim-table"><thead><tr><th scope="col">VPN</th><th scope="col">PPN</th><th scope="col">Base</th><th scope="col">Status</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  function renderCacheTable(config) {
+    const el = $('simCacheTable');
+    if (!config) {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Cache table will appear here.';
+      return;
+    }
+    const last = sim.core.last;
+    const whole = config.numBlocks <= TABLE_ROWS_SHOWN_WHOLE;
+    const setIndexes = whole
+      ? Array.from({ length: config.numSets }, (_, index) => index)
+      : [...sim.core.sets.keys()].sort((a, b) => a - b);
+    if (!setIndexes.length) {
+      el.className = 'table-shell empty-state';
+      el.textContent = `${config.numSets} sets of ${config.associativity}. Each set appears here once an address lands in it.`;
+      return;
+    }
+    const emptyWays = Array.from({ length: config.associativity }, (_, way) => ({ way, valid: false }));
+    const rows = [];
+    for (const setIndex of setIndexes) {
+      for (const line of (sim.core.sets.get(setIndex) || emptyWays)) {
+        const current = last && last.setIndex === setIndex && last.way === line.way;
+        const stateLabel = line.valid ? (current ? 'Active' : (line.dirty ? 'Dirty' : 'Loaded')) : 'Empty';
+        const mapping = line.valid
+          ? `<div class="mapping-cell">
+              <strong>${escapeHtml(toHex(line.tag))}</strong>
+              <span>tag</span>
+              <div class="mapping-meta">block ${line.blockNumber} · base ${escapeHtml(toHex(line.baseAddress))} · dirty ${line.dirty ? '1' : '0'}</div>
+            </div>`
+          : '<div class="mapping-empty">No block loaded yet</div>';
+        rows.push(`
+          <tr class="${current ? 'active-row' : ''}">
+            <td>${setIndex}</td>
+            <td>${line.way}</td>
+            <td><span class="state-badge ${stateLabel.toLowerCase()}">${stateLabel}</span></td>
+            <td>${mapping}</td>
+          </tr>
+        `);
+      }
+    }
+    el.className = 'table-shell';
+    el.innerHTML = `<table class="sim-table"><thead><tr>${['Set', 'Way', 'State', 'Mapping'].map((header) => `<th scope="col">${header}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>${whole ? '' : `<p class="table-note">Showing the ${setIndexes.length} sets used so far, of ${config.numSets}.</p>`}`;
+    scrollActiveRowIntoView(el);
+  }
+
+  function renderMemoryTable(config) {
+    const el = $('simMemoryTable');
+    const last = sim.core ? sim.core.last : null;
+    if (!config || !last) {
+      el.className = 'table-shell empty-state';
+      el.textContent = 'Memory blocks will appear here.';
+      return;
+    }
+    const currentBlock = last.blockNumber;
+    const maxBlocks = Math.max(1, Math.floor(config.memoryBytes / config.blockSize));
+    const startBlock = Math.max(0, currentBlock - 2);
+    const endBlock = Math.min(maxBlocks - 1, currentBlock + 2);
+    const rows = [];
+    for (let block = startBlock; block <= endBlock; block += 1) {
+      const base = block * config.blockSize;
+      const bytes = Array.from({ length: Math.min(config.blockSize, 8) }, (_, index) => toHex(base + index)).join(', ');
+      rows.push(`
+        <tr class="${block === currentBlock ? 'active-row' : ''}">
+          <td>${block}</td>
+          <td>${escapeHtml(toHex(base))}</td>
+          <td>${escapeHtml(toHex(base + config.blockSize - 1))}</td>
+          <td>${escapeHtml(bytes)}${config.blockSize > 8 ? ', …' : ''}</td>
+        </tr>
+      `);
+    }
+    el.className = 'table-shell';
+    el.innerHTML = `<table class="sim-table"><thead><tr><th scope="col">Block</th><th scope="col">Start</th><th scope="col">End</th><th scope="col">Bytes</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  // A table that scrolls must be reachable from the keyboard, and say what it is.
+  const SCROLL_REGIONS = {
+    simTrace: 'Trace of accesses',
+    simCacheTable: 'Cache table',
+    simTlbTable: 'TLB table',
+    simPageTable: 'Page table',
+    simMemoryTable: 'Memory blocks',
+  };
+  function labelScrollRegions() {
+    for (const [id, label] of Object.entries(SCROLL_REGIONS)) {
+      const el = $(id);
+      if (el.querySelector('table')) {
+        el.tabIndex = 0;
+        el.setAttribute('role', 'region');
+        el.setAttribute('aria-label', label);
+      } else {
+        el.removeAttribute('tabindex');
+        el.removeAttribute('role');
+        el.removeAttribute('aria-label');
+      }
+    }
+  }
+
+  function renderSimulator(v) {
+    const config = Solver.simConfig(v);
+    const status = $('simStatus');
+    const controls = ['simAddBtn', 'simRandomBtn', 'simResetBtn', 'simRunBtn', 'simAddress', 'simList'].map($);
+
+    if (!config) {
+      resetSimulator();
+      status.textContent = simulatorBlocker(v);
+      status.className = 'simulator-status';
+      for (const control of controls) control.disabled = true;
+      renderBreakdown(null, null);
+      renderTranslation(null, null);
+      renderAddressChain(null, null);
+      renderTrace();
+      renderStats();
+      renderAssumptions(null);
+      renderTlbTable(null);
+      renderPageTable(null);
+      renderCacheTable(null);
+      renderMemoryTable(null);
+      labelScrollRegions();
+      return;
+    }
+
+    const modeEl = $('simAddressType');
+    const virtualSupported = Solver.simSupportsVirtual(config);
+    modeEl.querySelector('option[value="virtual"]').disabled = !virtualSupported;
+    if (!virtualSupported && modeEl.value === 'virtual') {
+      modeEl.value = 'physical';
+    }
+    const mode = modeEl.value;
+
+    ensureSimulator(config);
+    const last = sim.core.last;
+    if (sim.message) {
+      status.textContent = sim.message;
+      status.className = `simulator-status ready${last ? ` ${last.outcome.toLowerCase()}` : ''}`;
+    } else {
+      status.textContent = `${config.associativity}-way cache · ${config.numSets} ${config.numSets === 1 ? 'set' : 'sets'} · ${config.blockSize}-byte blocks${mode === 'virtual' ? ' · virtual translation on' : ''}`;
+      status.className = 'simulator-status ready';
+    }
+    for (const control of controls) control.disabled = false;
+    renderTranslation(last, config);
+    renderBreakdown(last, config);
+    renderAddressChain(last, config);
+    renderTrace();
+    renderStats();
+    renderAssumptions(config);
+    renderTlbTable(config);
+    renderPageTable(config);
+    renderCacheTable(config);
+    renderMemoryTable(config);
+    labelScrollRegions();
+  }
+
+  // One access through the running simulator; returns what happened.
+  function stepSimulator(config, inputAddress, mode, operation) {
+    ensureSimulator(config);
+    const translation = mode === 'virtual' ? Solver.simTranslate(sim.core, inputAddress) : null;
+    const access = Solver.simAccess(sim.core, translation ? translation.physicalAddress : inputAddress, operation, translation);
+    sim.trace.push(access);
+    if (sim.trace.length > Solver.TRACE_LIMIT) sim.trace.shift();
+    return access;
+  }
+
+  function simulatorInputs() {
+    const values = settleNow().values;
+    const config = Solver.simConfig(values);
+    const mode = $('simAddressType').value;
+    return {
+      values,
+      config,
+      mode,
+      operation: $('simOperation').value,
+      bitWidth: config ? (mode === 'virtual' ? config.virtualAddressSize : config.addressSize) : null,
+    };
+  }
+
+  function handleSimulatorAccess() {
+    const { values, config, mode, operation, bitWidth } = simulatorInputs();
+    if (!config) return;
+    ensureSimulator(config);
+    const address = Solver.parseAddress($('simAddress').value, bitWidth);
+    if (address == null) {
+      sim.message = `Enter an address between 0 and ${toHex((2 ** bitWidth) - 1)}, in hex (0x3F), binary (0b111111) or decimal.`;
+      renderSimulator(values);
+      $('simStatus').className = 'simulator-status';
+      return;
+    }
+    const access = stepSimulator(config, address, mode, operation);
+    sim.message = `Last ${operation} ${mode === 'virtual' ? `${toHex(address)} → ${toHex(access.address)}` : toHex(address)} → ${access.outcome} in set ${access.setIndex}, way ${access.way}${access.dirty ? ' · dirty' : ''}.`;
+    renderSimulator(values);
+  }
+
+  function handleRandomAccess() {
+    const { config, bitWidth } = simulatorInputs();
+    if (!config) return;
+    $('simAddress').value = toHex(Math.floor(Math.random() * (2 ** bitWidth)));
+    handleSimulatorAccess();
+  }
+
+  // A pasted list, always from an empty cache so the answer matches a worked exercise.
+  function handleRunList() {
+    const { values, config, mode, operation, bitWidth } = simulatorInputs();
+    if (!config) return;
+    const trace = Solver.parseTrace($('simList').value, bitWidth, operation);
+    sim.key = '';
+    ensureSimulator(config);
+    if (!trace.accesses.length) {
+      sim.message = trace.errors.length
+        ? `None of those could be read as addresses of up to ${bitWidth} bits: ${trace.errors.join(', ')}.`
+        : 'Paste or type some addresses first, separated by spaces, commas or new lines.';
+      renderSimulator(values);
+      $('simStatus').className = 'simulator-status';
+      return;
+    }
+    for (const { address, operation: op } of trace.accesses) stepSimulator(config, address, mode, op);
+    const { stats } = sim.core;
+    const notes = [];
+    if (trace.errors.length) notes.push(`skipped ${trace.errors.join(', ')}`);
+    if (trace.truncated) notes.push(`stopped at ${Solver.TRACE_LIMIT} addresses`);
+    sim.message = `Ran ${stats.accesses} ${stats.accesses === 1 ? 'access' : 'accesses'} from an empty cache: ${stats.hits} ${stats.hits === 1 ? 'hit' : 'hits'}, ${stats.misses} ${stats.misses === 1 ? 'miss' : 'misses'}${notes.length ? ` (${notes.join('; ')})` : ''}.`;
+    renderSimulator(values);
+  }
+
+  function handleResetTrace() {
+    const { values } = simulatorInputs();
+    $('simAddress').value = '';
+    sim.key = '';
+    renderSimulator(values);
+  }
+
   // ───────────────────────────── recompute ─────────────────────────────────
+  // Once per frame, however many keys were pressed in it. A page that is not being painted (a background tab,
+  // a browser driven by a program) gets no frames, so a short timer does the same job there.
   let pending = false;
   function recompute() {
     if (pending) return;
     pending = true;
-    requestAnimationFrame(() => {
+    let ran = false;
+    const run = () => {
+      if (ran) return;
+      ran = true;
       pending = false;
-      const v = solve();
-      // Write derived values back into form inputs.
-      for (const id of Object.keys(FIELDS)) {
-        if (id === activeId) continue;
-        if (state[id] === 'user') continue; // don't touch user-typed values
-        writeField(id, v[id]);
+      const result = settleNow();
+
+      // A box was left: older typed values that lost to newer ones are replaced now, and become derived.
+      if (commitPending) {
+        commitPending = false;
+        const replaced = Object.keys(result.overridden).filter((id) => id !== activeId && state[id] === 'user');
+        if (replaced.length) {
+          adjustments = replaced.map((id) => result.overridden[id].text);
+          for (const id of replaced) state[id] = 'empty';
+        }
       }
-      // Recompute "extras" (display-only) from the now-coherent vals.
-      const e = deriveExtras(v);
-      renderResults(v, e);
-      renderSimulator(v);
-    });
+
+      for (const id of FIELD_IDS) {
+        const input = $(id);
+        const overridden = state[id] === 'user' && id in result.overridden;
+        input.classList.toggle('overridden', overridden);
+        if (id === activeId || state[id] === 'user') continue;
+        writeField(id, result.values[id]);
+      }
+
+      paint('cacheResults', result.rows.cache);
+      paint('memResults', result.rows.memory);
+      renderLayouts(result.layouts);
+      renderNotes(result);
+      renderWorking(result);
+      renderSimulator(result.values);
+      syncLink(result.given);
+    };
+    requestAnimationFrame(run);
+    window.setTimeout(run, 80);
+  }
+
+  // ───────────────────────────── links and examples ─────────────────────────
+  // The address bar always carries the typed values, so the page can be bookmarked or shared as it stands.
+  function linkFor(given) {
+    const params = new URLSearchParams(window.location.search);
+    for (const name of [...FIELD_IDS, ...Object.keys(Solver.UNIT_IDS)]) params.delete(name);
+    const rest = params.toString();
+    const query = [rest, Solver.toQuery(given)].filter(Boolean).join('&');
+    return `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+  }
+  function syncLink(given) {
+    const next = linkFor(given);
+    if (next === lastQuery) return;
+    lastQuery = next;
+    try {
+      window.history.replaceState(window.history.state, '', next);
+    } catch {
+      // a sandboxed frame may refuse; the Copy link button still works
+    }
+  }
+
+  // Fill the form with known values (canonical units), as though the visitor had typed them in this order.
+  function applyGiven(given) {
+    resetFields();
+    for (const id of FIELD_IDS) {
+      const value = given[id];
+      if (value == null) continue;
+      const f = FIELDS[id];
+      const input = $(id);
+      if (f.kind === 'size') {
+        const size = Solver.splitSize(value);
+        setUnit(f.unitId, size.unit);
+        input.value = formatNum(size.value);
+      } else {
+        input.value = formatNum(value);
+      }
+      state[id] = 'user';
+      editedAt[id] = ++recencyCounter;
+    }
+    recompute();
+  }
+
+  function applyQuery(query) {
+    const parsed = Solver.parseInputs(new URLSearchParams(query));
+    if (parsed.error) {
+      linkProblem = parsed.error;
+      return false;
+    }
+    if (!Object.keys(parsed.given).length) return false;
+    applyGiven(parsed.given);
+    return true;
+  }
+
+  async function copyLink() {
+    const button = $('copyLinkBtn');
+    const url = new URL(linkFor(settleNow().given), window.location.href).href;
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+    } catch {
+      const holder = make('textarea');
+      holder.value = url;
+      holder.setAttribute('readonly', '');
+      holder.className = 'offscreen';
+      document.body.append(holder);
+      holder.select();
+      try { copied = document.execCommand('copy'); } catch { copied = false; }
+      holder.remove();
+    }
+    const label = button.dataset.label || button.textContent;
+    button.dataset.label = label;
+    button.textContent = copied ? 'Link copied' : 'Copy it from the address bar';
+    window.setTimeout(() => { button.textContent = label; }, 2200);
   }
 
   // ─────────────────────────────── wiring ──────────────────────────────────
+  function resetFields() {
+    activeId = null;
+    recencyCounter = 0;
+    commitPending = false;
+    adjustments = [];
+    linkProblem = '';
+    for (const id of FIELD_IDS) {
+      const input = $(id);
+      input.value = '';
+      input.classList.remove('auto-filled', 'overridden');
+      state[id] = 'empty';
+      editedAt[id] = 0;
+      const unitId = FIELDS[id].unitId;
+      if (unitId) {
+        unitPicked[unitId] = false;
+        if (unitDefault[unitId]) setUnit(unitId, unitDefault[unitId]);
+      }
+    }
+    resetSimulator();
+  }
+
+  function clearAll() {
+    resetFields();
+    $('simAddress').value = '';
+    $('simList').value = '';
+    $('simAddressType').value = 'physical';
+    $('simOperation').value = 'read';
+    recompute();
+  }
+
+  // The sticky bars' height, so a jump to a section does not land underneath them.
+  function measureBars() {
+    const top = document.querySelector('.topbar');
+    const nav = document.querySelector('.section-nav');
+    const topHeight = top ? top.getBoundingClientRect().height : 0;
+    const navHeight = nav ? nav.getBoundingClientRect().height : 0;
+    document.documentElement.style.setProperty('--topbar-h', `${Math.round(topHeight)}px`);
+    document.documentElement.style.setProperty('--sticky-h', `${Math.round(topHeight + navHeight)}px`);
+  }
+
+  function watchSections() {
+    const links = [...document.querySelectorAll('.section-nav a')];
+    const targets = links.map((link) => document.getElementById(link.hash.slice(1))).filter(Boolean);
+    if (!targets.length) return;
+    let queued = false;
+    const mark = () => {
+      queued = false;
+      const line = (Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sticky-h')) || 112) + 48;
+      let current = targets[0];
+      for (const target of targets) {
+        if (target.getBoundingClientRect().top <= line) current = target;
+      }
+      for (const link of links) {
+        if (link.hash === `#${current.id}`) link.setAttribute('aria-current', 'true');
+        else link.removeAttribute('aria-current');
+      }
+    };
+    window.addEventListener('scroll', () => {
+      if (queued) return;
+      queued = true;
+      window.setTimeout(mark, 60);
+    }, { passive: true });
+    mark();
+  }
+
   function attach() {
-    for (const id of Object.keys(FIELDS)) {
-      const el = $(id);
-      el.addEventListener('focus', () => { activeId = id; });
-      el.addEventListener('blur',  () => { if (activeId === id) activeId = null; recompute(); });
-      el.addEventListener('input', (ev) => {
+    for (const id of FIELD_IDS) {
+      const input = $(id);
+      input.addEventListener('focus', () => { activeId = id; });
+      input.addEventListener('blur', () => {
+        if (activeId === id) activeId = null;
+        commitPending = true;
+        recompute();
+      });
+      input.addEventListener('input', (ev) => {
         if (!ev.isTrusted) return;
-        const raw = el.value.trim();
+        const raw = input.value.trim();
         if (raw === '') {
           state[id] = 'empty';
           editedAt[id] = 0;
@@ -810,7 +1063,9 @@
           state[id] = 'user';
           editedAt[id] = ++recencyCounter;
         }
-        el.classList.remove('auto-filled');
+        input.classList.remove('auto-filled');
+        adjustments = [];
+        linkProblem = '';
         recompute();
       });
       // Unit selector changes: rewrite the displayed number in the new unit
@@ -818,17 +1073,19 @@
       const f = FIELDS[id];
       if (f.kind === 'size') {
         const unitEl = $(f.unitId);
-        let lastUnit = unitEl.value;
+        unitOf[f.unitId] = unitEl.value;
+        unitDefault[f.unitId] = unitEl.value;
         unitEl.addEventListener('change', () => {
-          const raw = el.value.trim();
+          const raw = input.value.trim();
           if (raw !== '') {
             const n = Number(raw);
             if (Number.isFinite(n)) {
-              const canonical = n * UNITS[lastUnit];
-              el.value = formatNum(canonical / UNITS[unitEl.value]);
+              const canonical = n * UNITS[unitOf[f.unitId]];
+              input.value = formatNum(canonical / UNITS[unitEl.value]);
             }
           }
-          lastUnit = unitEl.value;
+          unitOf[f.unitId] = unitEl.value;
+          unitPicked[f.unitId] = true;
           recompute();
         });
       }
@@ -836,13 +1093,21 @@
 
     $('clearBtn').addEventListener('click', clearAll);
     $('resetBtn').addEventListener('click', clearAll);
+    $('copyLinkBtn').addEventListener('click', copyLink);
+    for (const button of document.querySelectorAll('[data-example]')) {
+      button.addEventListener('click', () => {
+        applyQuery(button.dataset.example);
+      });
+    }
+
     $('simAddBtn').addEventListener('click', handleSimulatorAccess);
     $('simRandomBtn').addEventListener('click', handleRandomAccess);
     $('simResetBtn').addEventListener('click', handleResetTrace);
+    $('simRunBtn').addEventListener('click', handleRunList);
+    $('simPolicy').addEventListener('change', handleResetTrace);
     $('simAddressType').addEventListener('change', () => {
       $('simAddress').value = '';
-      clearSimulatorTrace(getCurrentSimulatorConfig());
-      renderSimulator(readAll());
+      handleResetTrace();
     });
     $('simAddress').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
@@ -878,70 +1143,18 @@
       const t = document.documentElement.getAttribute('data-theme');
       themeBtn.textContent = t === 'dark' ? '☀️' : '🌙';
     }
-  }
 
-  function clearAll() {
-    activeId = null;
-    recencyCounter = 0;
-    for (const id of Object.keys(FIELDS)) {
-      const el = $(id);
-      el.value = '';
-      el.classList.remove('auto-filled');
-      state[id] = 'empty';
-      editedAt[id] = 0;
+    measureBars();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measureBars);
+      for (const bar of document.querySelectorAll('.topbar, .section-nav')) observer.observe(bar);
     }
-    resetSimulator();
-    $('simAddress').value = '';
-    $('simAddressType').value = 'physical';
-    $('simOperation').value = 'read';
-    recompute();
-  }
-
-  function getCurrentSimulatorConfig() {
-    return getSimulatorConfig(solve());
-  }
-
-  function handleSimulatorAccess() {
-    const config = getCurrentSimulatorConfig();
-    if (!config) return;
-    const input = $('simAddress');
-    const mode = $('simAddressType').value;
-    const operation = $('simOperation').value;
-    const bitWidth = mode === 'virtual' ? config.virtualAddressSize : config.addressSize;
-    const address = parseAddressInput(input.value, bitWidth);
-    if (address == null) {
-      $('simStatus').textContent = `Enter an address between 0 and ${toHex((2 ** bitWidth) - 1)}.`;
-      $('simStatus').className = 'simulator-status';
-      return;
-    }
-    const translation = resolveAccess(address, mode, config);
-    simulateAccess(translation.physicalAddress, config, translation, operation);
-    $('simStatus').textContent = `Last ${operation} ${mode === 'virtual' ? `${toHex(address)} → ${toHex(translation.physicalAddress)}` : toHex(address)} → ${simulator.lastAccess.outcome} in set ${simulator.lastAccess.setIndex}, way ${simulator.lastAccess.way}${simulator.lastAccess.dirty ? ' · dirty' : ''}.`;
-    $('simStatus').className = `simulator-status ready ${simulator.lastAccess.outcome.toLowerCase()}`;
-    renderSimulator(readAll());
-  }
-
-  function handleRandomAccess() {
-    const config = getCurrentSimulatorConfig();
-    if (!config) return;
-    const mode = $('simAddressType').value;
-    const bitWidth = mode === 'virtual' ? config.virtualAddressSize : config.addressSize;
-    const maxAddress = (2 ** bitWidth) - 1;
-    const random = Math.floor(Math.random() * (maxAddress + 1));
-    $('simAddress').value = toHex(random);
-    handleSimulatorAccess();
-  }
-
-  function handleResetTrace() {
-    const config = getCurrentSimulatorConfig();
-    $('simAddress').value = '';
-    clearSimulatorTrace(config);
-    renderSimulator(readAll());
+    watchSections();
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     attach();
-    recompute();
+    if (!applyQuery(window.location.search)) recompute();
   });
 })();
 

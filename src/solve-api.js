@@ -5,25 +5,14 @@
 //   GET /openapi.json
 //       describes it, so a ChatGPT Action or a function-calling app can import it.
 //
-// All the math is public/solver.js, the file the page itself runs. This file only reads the query string,
-// shapes the answer and describes it. It stores nothing and calls nothing.
+// All the math, and the reading of the parameters, is public/solver.js, the file the page itself runs (the
+// same parameters open the calculator pre-filled: /?cache_size=32KB&block_size=64). This file only shapes
+// the answer and describes it. It stores nothing and calls nothing.
 import '../public/solver.js';
 
 const Solver = globalThis.CacheCruncherSolver;
 
 const SITE_ORIGIN = 'https://cachecruncher.com';
-const MAX_PARAMS = 40;
-const MAX_VALUE_LENGTH = 40;
-const MAX_MAGNITUDE = 1e30;
-
-// 1 KB = 1024 bytes throughout: this is computer architecture, not a hard-drive box.
-const SIZE_FACTORS = {
-  b: 1,
-  k: 1024, kb: 1024, kib: 1024,
-  m: 1024 ** 2, mb: 1024 ** 2, mib: 1024 ** 2,
-  g: 1024 ** 3, gb: 1024 ** 3, gib: 1024 ** 3,
-  t: 1024 ** 4, tb: 1024 ** 4, tib: 1024 ** 4,
-};
 
 // Name in the answer for each internal field. A name that holds a byte count says so.
 export const VALUE_NAMES = {
@@ -79,9 +68,7 @@ export const PARAMS = {
   tlb_rows: { example: 64, text: 'Number of TLB rows (entries), a power of two. Gives TLB index and tag bits.' },
   protection_bits: { example: 4, text: 'Extra bits stored per page-table entry (valid, dirty, permissions). Needed for the page table size.' },
 };
-const UNIT_PARAMS = Object.fromEntries(
-  Solver.FIELD_IDS.filter((id) => Solver.FIELDS[id].unitId).map((id) => [Solver.FIELDS[id].unitId, id]),
-);
+const UNIT_PARAMS = Solver.UNIT_IDS;
 const UNIT_TEXT = 'Unit for a bare number: B, KB, MB, GB or TB (1 KB = 1024 bytes). Not needed when the size already has a unit.';
 
 const CORS = {
@@ -106,62 +93,6 @@ function refuse(request, status, error, message, extra = {}) {
   return json({ ok: false, error, message, ...extra, docs: `${SITE_ORIGIN}/openapi.json` }, status, request, false);
 }
 
-// A unit word to its byte count, or null. (Own keys only: "constructor" is not a unit.)
-const factorOf = (word) => (Object.hasOwn(SIZE_FACTORS, word) ? SIZE_FACTORS[word] : null);
-
-// "32", "32KB", "32 kb", "1,024", "0.5MB", "1e3" -> { value, suffix } (suffix lower-cased), or null.
-function parseQuantity(raw) {
-  const text = raw.trim().replace(/,(?=\d{3}(?:\D|$))/g, '');
-  const match = /^(\d+(?:\.\d+)?|\.\d+)(?:e([+-]?\d+))?\s*([a-z]*)$/i.exec(text);
-  if (!match) return null;
-  return { value: Number(match[1] + (match[2] ? `e${match[2]}` : '')), suffix: match[3].toLowerCase() };
-}
-
-// The query string -> { given, ignored } (values in bytes and bits), or { error } saying what to fix.
-function readQuery(searchParams) {
-  const names = [...new Set(searchParams.keys())];
-  if (names.length > MAX_PARAMS) return { error: `Too many parameters (${names.length}); the most accepted is ${MAX_PARAMS}.` };
-  const known = new Set([...Solver.FIELD_IDS, ...Object.keys(UNIT_PARAMS)]);
-  const ignored = names.filter((name) => !known.has(name)).map((name) => name.slice(0, MAX_VALUE_LENGTH));
-  const given = {};
-
-  for (const name of names) {
-    if (!known.has(name)) continue;
-    const values = searchParams.getAll(name);
-    if (values.length > 1) return { error: `"${name}" was given more than once; give it one value.` };
-    if (values[0].length > MAX_VALUE_LENGTH) return { error: `"${name}" is too long to be a number.` };
-  }
-
-  for (const id of Solver.FIELD_IDS) {
-    const raw = searchParams.get(id);
-    if (raw === null || raw.trim() === '') continue;
-    const sizeLike = Solver.FIELDS[id].kind === 'size' || id === 'block_size';
-    const quantity = parseQuantity(raw);
-    if (!quantity) {
-      return { error: `"${id}" must be a non-negative number${sizeLike ? ' with an optional unit, like 32KB' : ''} (got "${raw}").` };
-    }
-    let factor = 1;
-    const unitName = Solver.FIELDS[id].unitId;
-    const unitRaw = unitName ? searchParams.get(unitName) : null;
-    const unitSuffix = unitRaw && unitRaw.trim() !== '' ? unitRaw.trim().toLowerCase() : '';
-    if (quantity.suffix) {
-      if (!sizeLike) return { error: `"${id}" takes a plain number, not a unit (got "${raw}").` };
-      factor = factorOf(quantity.suffix);
-      if (factor === null) return { error: `"${id}" has an unknown unit "${quantity.suffix}"; use B, KB, MB, GB or TB.` };
-      if (unitSuffix && factorOf(unitSuffix) !== factor) {
-        return { error: `"${id}" has the unit ${quantity.suffix.toUpperCase()} but ${unitName} says ${unitRaw}; give the unit once.` };
-      }
-    } else if (unitSuffix) {
-      factor = factorOf(unitSuffix);
-      if (factor === null) return { error: `"${unitName}" must be B, KB, MB, GB or TB (got "${unitRaw}").` };
-    }
-    const value = quantity.value * factor;
-    if (!Number.isFinite(value) || value > MAX_MAGNITUDE) return { error: `"${id}" is too large.` };
-    given[id] = value;
-  }
-  return { given, ignored };
-}
-
 function present(source, names) {
   const out = {};
   for (const [internal, external] of Object.entries(names)) {
@@ -177,7 +108,7 @@ export function handleSolve(request) {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD, OPTIONS', ...CORS } });
   }
 
-  const query = readQuery(new URL(request.url).searchParams);
+  const query = Solver.parseInputs(new URL(request.url).searchParams);
   if (query.error) return refuse(request, 400, 'bad_parameter', query.error);
   if (!Object.keys(query.given).length) {
     return refuse(request, 400, 'no_values', query.ignored.length
@@ -211,10 +142,11 @@ export function handleSolve(request) {
     values: present(result.values, VALUE_NAMES),
     derived: present(result.extras, DERIVED_NAMES),
     formatted,
-    steps: result.steps,
+    steps: result.steps.map((step) => step.text),
     warnings,
     not_determined: notDetermined,
     notes: 'Names ending in _bytes are byte counts and names ending in _bits are bit counts (1 KB = 1024 bytes). Computed by Cache Cruncher, https://cachecruncher.com.',
+    calculator: `${SITE_ORIGIN}/?${Solver.toQuery(query.given)}`,
     docs: `${SITE_ORIGIN}/openapi.json`,
   }, 200, request, true);
 }
@@ -288,6 +220,7 @@ function openApiDocument() {
             warnings: { type: 'array', description: 'Values that are not powers of two, not whole numbers, or ignored parameters.', items: { type: 'string' } },
             not_determined: { ...stringMap, description: 'Results that could not be worked out, with what each needs.' },
             notes: { type: 'string' },
+            calculator: { type: 'string', description: 'A link that opens the web calculator with these values filled in, to show a person the result.' },
             docs: { type: 'string' },
           },
           required: ['ok', 'values', 'steps'],

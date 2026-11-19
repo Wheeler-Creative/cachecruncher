@@ -7,6 +7,7 @@ import { handleOpenApi, handleSolve, PARAMS, VALUE_NAMES, DERIVED_NAMES } from '
 const Solver = globalThis.CacheCruncherSolver;
 assert.ok(Solver, 'public/solver.js publishes globalThis.CacheCruncherSolver');
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+const texts = (result) => result.steps.map((step) => step.text);
 
 let checks = 0;
 function check(name, fn) {
@@ -36,8 +37,13 @@ check('32 KB, 4-way, 64-byte blocks, 32-bit addresses', () => {
   assert.equal(r.extras.total_overhead_bytes, 1280);
   assert.deepEqual(r.conflicts, []);
   assert.deepEqual(r.warnings, []);
-  assert.ok(r.steps.includes('Number of blocks = cache size / block size = 32768 / 64 = 512.'));
-  assert.ok(r.steps.includes('Tag bits = address bits − index bits − offset bits = 32 − 7 − 6 = 19.'));
+  assert.ok(texts(r).includes('Number of blocks = cache size / block size = 32768 / 64 = 512.'));
+  assert.ok(texts(r).includes('Tag bits = address bits − index bits − offset bits = 32 − 7 − 6 = 19.'));
+  assert.deepEqual(r.layouts.cache, [
+    { name: 'Tag', bits: 19, high: 31, low: 13 },
+    { name: 'Index', bits: 7, high: 12, low: 6 },
+    { name: 'Offset', bits: 6, high: 5, low: 0 },
+  ]);
 });
 
 check('direct-mapped and fully associative', () => {
@@ -62,7 +68,10 @@ check('page table and TLB', () => {
   assert.equal(e.virtual_pages, 2 ** 20);
   assert.equal(e.physical_pages, 2 ** 20);
   assert.equal(e.page_table_bytes, 3 * 2 ** 20);
-  assert.ok(r.steps.includes('Page table size = page table bits / 8 = 25165824 / 8 = 3145728 bytes.'));
+  assert.ok(texts(r).includes('Page table size = page table bits / 8 = 25165824 / 8 = 3145728 bytes.'));
+  assert.deepEqual(r.layouts.virtual.map((part) => [part.name, part.bits, part.high, part.low]),
+    [['Virtual page number', 20, 31, 12], ['Page offset', 12, 11, 0]]);
+  assert.deepEqual(r.layouts.tlb.map((part) => part.bits), [14, 6, 12]);
 });
 
 check('a size over 32 bits that is not a power of two is not treated as one', () => {
@@ -98,13 +107,59 @@ check('says what is missing and what it needs', () => {
   assert.equal(r.notDetermined.num_sets, undefined);
 });
 
-check('the page keeps its rule: the most recent edit wins, and the focused field is never touched', () => {
-  const values = { cache_size: 32768, block_size: 128, num_blocks: 512 }; // block_size just edited from 64
-  const recency = { cache_size: 1, block_size: 3, num_blocks: -1 };      // num_blocks was only derived
-  assert.equal(Solver.solve(values, recency).values.num_blocks, 256);
-  assert.equal(Solver.solve(values, recency, 'num_blocks').values.num_blocks, 512);
-  const equal = Solver.solve({ cache_size: 32768, block_size: 64, num_blocks: 500 }, { cache_size: 1, block_size: 1, num_blocks: 1 });
-  assert.equal(equal.values.num_blocks, 500); // equal weight: nothing silently wins
+check('known values are never changed, whatever order they are derived in', () => {
+  const r = Solver.solve({ cache_size: 32768, block_size: 64, num_blocks: 500 });
+  assert.deepEqual([r.values.cache_size, r.values.block_size, r.values.num_blocks], [32768, 64, 500]);
+});
+
+// The page: the values a visitor typed, newest first.
+check('the page derives from what was typed, so a changed block size cannot leave old bits behind', () => {
+  // Typed 32 KB, 64 B, 4-way, 32 bits; then the block size is changed to 128. Before, the old index bits (7)
+  // were fed back in and tag bits came out as 12 or 18.
+  const typed = { cache_size: 32768, block_size: 128, associativity: 4, address_size: 32 };
+  const r = Solver.settle(typed, ['block_size', 'address_size', 'associativity', 'cache_size']);
+  assert.deepEqual([r.values.num_blocks, r.values.num_sets, r.values.index_bits, r.values.offset_bits, r.values.tag_bits], [256, 64, 6, 7, 19]);
+  assert.deepEqual(r.overridden, {});
+  assert.deepEqual(r.conflicts, []);
+});
+
+check('the most recent edits win, and the oldest value that disagrees gives way', () => {
+  // Index bits typed first, then a cache that has 64 sets: index bits must become 6, not the cache size change.
+  const typed = { index_bits: 7, cache_size: 16384, block_size: 64, associativity: 4 };
+  const r = Solver.settle(typed, ['associativity', 'block_size', 'cache_size', 'index_bits']);
+  assert.equal(r.values.cache_size, 16384);
+  assert.equal(r.values.num_sets, 64);
+  assert.equal(r.values.index_bits, 6);
+  assert.deepEqual(Object.keys(r.overridden), ['index_bits']);
+  assert.equal(r.overridden.index_bits.value, 6);
+  assert.match(r.overridden.index_bits.text, /^Index bits was 7, but log2\(number of sets\) = log2\(64\) = 6 /);
+  // The same values with index bits typed last: now the cache size gives way... no, associativity is oldest.
+  const again = Solver.settle(typed, ['index_bits', 'cache_size', 'block_size', 'associativity']);
+  assert.equal(again.values.index_bits, 7);
+  assert.equal(again.values.cache_size, 16384);
+  assert.deepEqual(Object.keys(again.overridden), ['associativity']);
+  assert.equal(again.values.associativity, 2);
+  assert.deepEqual(again.conflicts, []);
+});
+
+check('a typed value the newer ones already agree with is kept, and a cleared one is simply derived', () => {
+  const r = Solver.settle({ cache_size: 32768, block_size: 64, num_blocks: 512 }, ['num_blocks', 'block_size', 'cache_size']);
+  assert.deepEqual(r.overridden, {});
+  assert.deepEqual(Object.keys(r.given).sort(), ['block_size', 'cache_size', 'num_blocks']);
+  const cleared = Solver.settle({ block_size: 64, associativity: 4 }, ['associativity', 'block_size']);
+  assert.equal(cleared.values.num_blocks, null);
+  assert.equal(cleared.values.offset_bits, 6);
+});
+
+check('links carry the same parameters the API reads', () => {
+  const given = { cache_size: 32768, block_size: 64, associativity: 4, address_size: 32, pagesize: 4096, addressable_memory: 3 * 1024 ** 3 + 1 };
+  const query = Solver.toQuery(given);
+  assert.equal(query, 'cache_size=32KB&block_size=64&associativity=4&address_size=32&addressable_memory=3221225473&pagesize=4KB');
+  assert.deepEqual(Solver.parseInputs(new URLSearchParams(query)).given, given);
+  assert.deepEqual(Solver.splitSize(32768), { value: 32, unit: 'KB' });
+  assert.deepEqual(Solver.splitSize(4 * 1024 ** 3), { value: 4, unit: 'GB' });
+  assert.deepEqual(Solver.splitSize(1536), { value: 1536, unit: 'B' });
+  assert.equal(Solver.fmtBytes(2 ** 64), '16 EB');
 });
 
 // ───────────────────────────── the API ─────────────────────────────
@@ -124,6 +179,8 @@ await checkAsync('GET /api/solve answers the worked example', async () => {
   assert.equal(body.formatted['Cache Size'], '32 KB');
   assert.equal(body.formatted['Tag Bits'], '19');
   assert.ok(body.steps.length >= 6);
+  assert.ok(body.steps.every((step) => typeof step === 'string'));
+  assert.equal(body.calculator, 'https://cachecruncher.com/?cache_size=32KB&block_size=64&associativity=4&address_size=32');
   assert.deepEqual(body.not_determined, {});
 });
 
@@ -239,12 +296,17 @@ await checkAsync('GET /openapi.json describes exactly what the endpoint reads', 
 // ───────────────────────────── the wiring ─────────────────────────────
 check('the page loads the solver before app.js, and app.js has no second copy of the math', () => {
   const scripts = read('layout/scripts.html');
-  assert.ok(scripts.includes('<script src="/solver.js"></script>'));
+  // The files are cached for a day, so the page names a version: bump it in layout/ whenever they change together.
+  const version = (file) => (new RegExp(`"/${file}\\?v=(\\d+)"`).exec(file === 'styles.css' ? read('layout/head.html') : scripts) || [])[1];
+  assert.ok(version('solver.js'), 'the page loads /solver.js with a version');
+  assert.equal(version('solver.js'), version('app.js'), 'solver.js and app.js carry the same version');
+  assert.equal(version('styles.css'), version('app.js'), 'styles.css carries it too');
   assert.ok(scripts.indexOf('/solver.js') < scripts.indexOf('/app.js'), 'solver.js must come first');
   const app = read('public/app.js');
   assert.ok(app.includes('globalThis.CacheCruncherSolver'));
   assert.ok(!/const RULES\b/.test(app), 'the rules live in public/solver.js');
   assert.ok(!/function deriveExtras\b/.test(app), 'deriveExtras lives in public/solver.js');
+  assert.ok(!/function simulateAccess\b/.test(app), 'the simulator core lives in public/solver.js');
   assert.ok(read('wrangler.jsonc').includes('"!/solver.js"'), 'solver.js is served straight from assets, like app.js');
   assert.ok(read('src/site-routes.js').includes("from './solve-api.js'"));
 });
