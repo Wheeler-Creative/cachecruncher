@@ -14,7 +14,6 @@
       "/*",
       "!/styles.css",
       "!/app.js",
-      "!/solver.js",
       "!/site-modules.js",
       "!/site-behaviors.js"
     ],

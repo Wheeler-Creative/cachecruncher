@@ -1606,11 +1606,18 @@ function siteIconSvg(settings) {
     + '<text x="32" y="32" dy=".35em" text-anchor="middle" font-family="Helvetica,Arial,sans-serif" font-weight="700" font-size="' + (initials.length > 1 ? 28 : 36) + '" fill="'
     + colour(settings && settings.color, "#ffffff") + '">' + initials + '</text></svg>';
 }
+// The icon picture: in the shared bucket, or, for a website that keeps its photos in a bucket of its own (bound as PHOTOS,
+// every name starting photos/), there.
+async function siteIconObject(env, mediaPath) {
+  const relative = String(mediaPath).replace(/^\/+/, "");
+  const shared = env.MEDIA ? await env.MEDIA.get(MEDIA_PREFIX + relative) : null;
+  if (shared) return shared;
+  return env.PHOTOS && relative.indexOf("photos/") === 0 && relative.indexOf("..") < 0 ? env.PHOTOS.get(relative) : null;
+}
 async function serveSiteIcon(env, size) {
   const settings = await siteIconSettings(env);
-  if (settings && settings.mediaPath && env.MEDIA) {
-    const key = MEDIA_PREFIX + String(settings.mediaPath).replace(/^\/+/, "");
-    const object = await env.MEDIA.get(key);
+  if (settings && settings.mediaPath && (env.MEDIA || env.PHOTOS)) {
+    const object = await siteIconObject(env, settings.mediaPath);
     if (object) {
       try {
         if (!env.IMAGES) throw new Error("no images binding");
@@ -1619,7 +1626,7 @@ async function serveSiteIcon(env, size) {
         response.headers.set("cache-control", "public, max-age=3600");
         return response;
       } catch {
-        const original = await env.MEDIA.get(key);
+        const original = await siteIconObject(env, settings.mediaPath);
         if (original) {
           const headers = new Headers({ "cache-control": "public, max-age=3600" });
           if (original.httpMetadata && original.httpMetadata.contentType) headers.set("content-type", original.httpMetadata.contentType);

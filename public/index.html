@@ -5,23 +5,23 @@
       step through addresses and render visual cache and memory tables.
     </p>
 
-    <nav class="section-nav" aria-label="On this page">
-      <a href="#calculator">Calculator</a>
-      <a href="#address-layout">Address layout</a>
-      <a href="#results">Results</a>
-      <a href="#working">Working</a>
-      <a href="#simulator">Simulator</a>
-      <a href="#formulas">Formulas</a>
+    <nav data-ww-block="home-section-nav" class="section-nav" aria-label="On this page">
+      <a data-ww-edit="home-section-nav-link" data-ww-kind="text" data-ww-label="Link text" data-ww-group="Section nav" href="#calculator">Calculator</a>
+      <a data-ww-edit="home-section-nav-link-2" data-ww-kind="text" data-ww-label="Link text 2" data-ww-group="Section nav" href="#address-layout">Address layout</a>
+      <a data-ww-edit="home-section-nav-link-3" data-ww-kind="text" data-ww-label="Link text 3" data-ww-group="Section nav" href="#results">Results</a>
+      <a data-ww-edit="home-section-nav-link-4" data-ww-kind="text" data-ww-label="Link text 4" data-ww-group="Section nav" href="#working">Working</a>
+      <a data-ww-edit="home-section-nav-link-5" data-ww-kind="text" data-ww-label="Link text 5" data-ww-group="Section nav" href="#simulator">Simulator</a>
+      <a data-ww-edit="home-section-nav-link-6" data-ww-kind="text" data-ww-label="Link text 6" data-ww-group="Section nav" href="#formulas">Formulas</a>
     </nav>
 
     <form data-ww-block="home-calcform" id="calcForm" autocomplete="off">
       <div class="starter" id="calculator">
-        <span class="starter-label">Try an example:</span>
-        <button type="button" class="chip" data-example="cache_size=32KB&amp;block_size=64&amp;associativity=4&amp;address_size=32">32 KB, 4-way, 64-byte blocks</button>
-        <button type="button" class="chip" data-example="cache_size=16KB&amp;block_size=32&amp;associativity=1&amp;address_size=32">Direct-mapped, 16 KB</button>
-        <button type="button" class="chip" data-example="num_blocks=8&amp;block_size=4&amp;num_sets=1&amp;address_size=16">Fully associative, 8 blocks</button>
-        <button type="button" class="chip" data-example="cache_size=32KB&amp;block_size=64&amp;associativity=4&amp;address_size=32&amp;virtual_address_size=32&amp;pagesize=4KB&amp;tlb_rows=64&amp;protection_bits=4">Virtual memory with a TLB</button>
-        <button type="button" class="chip chip-link" id="copyLinkBtn" title="Copy a link that opens the calculator with these values">Copy link</button>
+        <span data-ww-edit="home-calcform-inline" data-ww-kind="text" data-ww-label="Text" data-ww-group="Cache Parameters" class="starter-label">Try an example:</span>
+        <button data-ww-edit="home-calcform-button-6" data-ww-kind="text" data-ww-label="Button text" data-ww-group="Cache Parameters" type="button" class="chip" data-example="cache_size=32KB&amp;block_size=64&amp;associativity=4&amp;address_size=32">32 KB, 4-way, 64-byte blocks</button>
+        <button data-ww-edit="home-calcform-button-2" data-ww-kind="text" data-ww-label="Button text 2" data-ww-group="Cache Parameters" type="button" class="chip" data-example="cache_size=16KB&amp;block_size=32&amp;associativity=1&amp;address_size=32">Direct-mapped, 16 KB</button>
+        <button data-ww-edit="home-calcform-button-3" data-ww-kind="text" data-ww-label="Button text 3" data-ww-group="Cache Parameters" type="button" class="chip" data-example="num_blocks=8&amp;block_size=4&amp;num_sets=1&amp;address_size=16">Fully associative, 8 blocks</button>
+        <button data-ww-edit="home-calcform-button-4" data-ww-kind="text" data-ww-label="Button text 4" data-ww-group="Cache Parameters" type="button" class="chip" data-example="cache_size=32KB&amp;block_size=64&amp;associativity=4&amp;address_size=32&amp;virtual_address_size=32&amp;pagesize=4KB&amp;tlb_rows=64&amp;protection_bits=4">Virtual memory with a TLB</button>
+        <button data-ww-edit="home-calcform-button-5" data-ww-kind="text" data-ww-label="Button text 5" data-ww-group="Cache Parameters" type="button" class="chip chip-link" id="copyLinkBtn" title="Copy a link that opens the calculator with these values">Copy link</button>
       </div>
       <p class="legend"><span class="legend-swatch" aria-hidden="true"></span>Shaded boxes were worked out for you. Type in any box to set it yourself; your most recent entries win.</p>
       <div class="grid">
@@ -78,24 +78,24 @@
           </div>
 
           <details class="terms">
-            <summary>What do these mean?</summary>
+            <summary data-ww-edit="home-calcform-label-9-2" data-ww-kind="text" data-ww-label="Label 9" data-ww-group="Cache Parameters">What do these mean?</summary>
             <dl>
-              <dt>Cache size</dt>
-              <dd>How many bytes of data the cache holds. Tags and valid bits are extra.</dd>
-              <dt>Block size</dt>
-              <dd>The bytes moved in and out of the cache together. Also called a cache line.</dd>
-              <dt>Number of blocks</dt>
-              <dd>Cache size divided by block size.</dd>
-              <dt>Associativity</dt>
-              <dd>How many blocks share a set (the number of ways). 1 is direct-mapped. One set holding every block is fully associative.</dd>
-              <dt>Number of sets</dt>
-              <dd>Number of blocks divided by associativity.</dd>
-              <dt>Offset bits</dt>
-              <dd>The low bits of an address. They pick a byte inside the block: log₂(block size).</dd>
-              <dt>Index bits</dt>
-              <dd>The middle bits. They pick the set: log₂(number of sets).</dd>
-              <dt>Tag bits</dt>
-              <dd>The bits left over at the top. They are stored with the block, to tell which block it is.</dd>
+              <dt data-ww-edit="home-calcform-text" data-ww-kind="text" data-ww-label="Paragraph" data-ww-group="Cache Parameters">Cache size</dt>
+              <dd data-ww-edit="home-calcform-text-2" data-ww-kind="text" data-ww-label="Paragraph 2" data-ww-group="Cache Parameters">How many bytes of data the cache holds. Tags and valid bits are extra.</dd>
+              <dt data-ww-edit="home-calcform-text-3" data-ww-kind="text" data-ww-label="Paragraph 3" data-ww-group="Cache Parameters">Block size</dt>
+              <dd data-ww-edit="home-calcform-text-4" data-ww-kind="text" data-ww-label="Paragraph 4" data-ww-group="Cache Parameters">The bytes moved in and out of the cache together. Also called a cache line.</dd>
+              <dt data-ww-edit="home-calcform-text-5" data-ww-kind="text" data-ww-label="Paragraph 5" data-ww-group="Cache Parameters">Number of blocks</dt>
+              <dd data-ww-edit="home-calcform-text-6" data-ww-kind="text" data-ww-label="Paragraph 6" data-ww-group="Cache Parameters">Cache size divided by block size.</dd>
+              <dt data-ww-edit="home-calcform-text-7" data-ww-kind="text" data-ww-label="Paragraph 7" data-ww-group="Cache Parameters">Associativity</dt>
+              <dd data-ww-edit="home-calcform-text-8" data-ww-kind="text" data-ww-label="Paragraph 8" data-ww-group="Cache Parameters">How many blocks share a set (the number of ways). 1 is direct-mapped. One set holding every block is fully associative.</dd>
+              <dt data-ww-edit="home-calcform-text-9" data-ww-kind="text" data-ww-label="Paragraph 9" data-ww-group="Cache Parameters">Number of sets</dt>
+              <dd data-ww-edit="home-calcform-text-10" data-ww-kind="text" data-ww-label="Paragraph 10" data-ww-group="Cache Parameters">Number of blocks divided by associativity.</dd>
+              <dt data-ww-edit="home-calcform-text-11" data-ww-kind="text" data-ww-label="Paragraph 11" data-ww-group="Cache Parameters">Offset bits</dt>
+              <dd data-ww-edit="home-calcform-text-12" data-ww-kind="text" data-ww-label="Paragraph 12" data-ww-group="Cache Parameters">The low bits of an address. They pick a byte inside the block: log₂(block size).</dd>
+              <dt data-ww-edit="home-calcform-text-13" data-ww-kind="text" data-ww-label="Paragraph 13" data-ww-group="Cache Parameters">Index bits</dt>
+              <dd data-ww-edit="home-calcform-text-14" data-ww-kind="text" data-ww-label="Paragraph 14" data-ww-group="Cache Parameters">The middle bits. They pick the set: log₂(number of sets).</dd>
+              <dt data-ww-edit="home-calcform-text-15" data-ww-kind="text" data-ww-label="Paragraph 15" data-ww-group="Cache Parameters">Tag bits</dt>
+              <dd data-ww-edit="home-calcform-text-16" data-ww-kind="text" data-ww-label="Paragraph 16" data-ww-group="Cache Parameters">The bits left over at the top. They are stored with the block, to tell which block it is.</dd>
             </dl>
           </details>
         </section>
@@ -169,32 +169,32 @@
           </div>
 
           <details class="terms">
-            <summary>What do these mean?</summary>
+            <summary data-ww-edit="home-calcform-label-17" data-ww-kind="text" data-ww-label="Label 17" data-ww-group="Cache Parameters">What do these mean?</summary>
             <dl>
-              <dt>Physical address space</dt>
-              <dd>The number of bits in a real memory address. With n bits you can reach 2ⁿ bytes.</dd>
-              <dt>Physical memory</dt>
-              <dd>The bytes those addresses reach. Fill in either this or the bits.</dd>
-              <dt>Virtual address space</dt>
-              <dd>The number of bits in the addresses a program uses, before they are translated.</dd>
-              <dt>Page size</dt>
-              <dd>Memory is mapped one page at a time. The low log₂(page size) bits are the page offset and are not translated.</dd>
-              <dt>TLB rows</dt>
-              <dd>Entries in the translation lookaside buffer, a small cache of recent page translations. It is treated as direct-mapped here.</dd>
-              <dt>Protection bits</dt>
-              <dd>Extra bits kept in each page-table entry, such as valid, dirty and read or write permission.</dd>
+              <dt data-ww-edit="home-calcform-text-17" data-ww-kind="text" data-ww-label="Paragraph 17" data-ww-group="Cache Parameters">Physical address space</dt>
+              <dd data-ww-edit="home-calcform-text-18" data-ww-kind="text" data-ww-label="Paragraph 18" data-ww-group="Cache Parameters">The number of bits in a real memory address. With n bits you can reach 2ⁿ bytes.</dd>
+              <dt data-ww-edit="home-calcform-text-19" data-ww-kind="text" data-ww-label="Paragraph 19" data-ww-group="Cache Parameters">Physical memory</dt>
+              <dd data-ww-edit="home-calcform-text-20" data-ww-kind="text" data-ww-label="Paragraph 20" data-ww-group="Cache Parameters">The bytes those addresses reach. Fill in either this or the bits.</dd>
+              <dt data-ww-edit="home-calcform-text-21" data-ww-kind="text" data-ww-label="Paragraph 21" data-ww-group="Cache Parameters">Virtual address space</dt>
+              <dd data-ww-edit="home-calcform-text-22" data-ww-kind="text" data-ww-label="Paragraph 22" data-ww-group="Cache Parameters">The number of bits in the addresses a program uses, before they are translated.</dd>
+              <dt data-ww-edit="home-calcform-text-23" data-ww-kind="text" data-ww-label="Paragraph 23" data-ww-group="Cache Parameters">Page size</dt>
+              <dd data-ww-edit="home-calcform-text-24" data-ww-kind="text" data-ww-label="Paragraph 24" data-ww-group="Cache Parameters">Memory is mapped one page at a time. The low log₂(page size) bits are the page offset and are not translated.</dd>
+              <dt data-ww-edit="home-calcform-text-25" data-ww-kind="text" data-ww-label="Paragraph 25" data-ww-group="Cache Parameters">TLB rows</dt>
+              <dd data-ww-edit="home-calcform-text-26" data-ww-kind="multiline" data-ww-label="Paragraph 26" data-ww-group="Cache Parameters">Entries in the translation lookaside buffer, a small cache of recent page translations. It is treated as direct-mapped here.</dd>
+              <dt data-ww-edit="home-calcform-text-27" data-ww-kind="text" data-ww-label="Paragraph 27" data-ww-group="Cache Parameters">Protection bits</dt>
+              <dd data-ww-edit="home-calcform-text-28" data-ww-kind="text" data-ww-label="Paragraph 28" data-ww-group="Cache Parameters">Extra bits kept in each page-table entry, such as valid, dirty and read or write permission.</dd>
             </dl>
           </details>
         </section>
       </div>
     </form>
 
-    <section id="notes" class="notes" aria-live="polite" hidden></section>
+    <section data-ww-block="home-notes" id="notes" class="notes" aria-live="polite" hidden></section>
 
-    <section class="card layout-card" id="address-layout">
-      <h2>Address layout</h2>
-      <p class="layout-help">The offset picks a byte inside the block, the index picks the set, and the tag is compared with the tags stored there to find the block.</p>
-      <div id="addressLayouts" class="layouts empty-state">Enter a cache and an address size to see how an address splits into tag, index and offset.</div>
+    <section data-ww-block="home-address-layout" class="card layout-card" id="address-layout">
+      <h2 data-ww-edit="home-address-layout-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Address layout">Address layout</h2>
+      <p data-ww-edit="home-address-layout-text" data-ww-kind="multiline" data-ww-label="Paragraph" data-ww-group="Address layout" class="layout-help">The offset picks a byte inside the block, the index picks the set, and the tag is compared with the tags stored there to find the block.</p>
+      <div data-ww-edit="home-address-layout-block" data-ww-kind="text" data-ww-label="Text" data-ww-group="Address layout" id="addressLayouts" class="layouts empty-state">Enter a cache and an address size to see how an address splits into tag, index and offset.</div>
     </section>
 
     <!-- Results -->
@@ -211,10 +211,10 @@
       </div>
     </section>
 
-    <section class="card working-card" id="working">
-      <h2>Working</h2>
-      <p class="layout-help">Each value, the formula behind it and the numbers that went in. Sizes are in bytes, and 1 KB is 1024 bytes.</p>
-      <div id="workingSteps" class="working empty-state">Enter some values, or try an example above, to see the working.</div>
+    <section data-ww-block="home-working" class="card working-card" id="working">
+      <h2 data-ww-edit="home-working-heading" data-ww-kind="text" data-ww-label="Heading" data-ww-group="Working">Working</h2>
+      <p data-ww-edit="home-working-text" data-ww-kind="text" data-ww-label="Paragraph" data-ww-group="Working" class="layout-help">Each value, the formula behind it and the numbers that went in. Sizes are in bytes, and 1 KB is 1024 bytes.</p>
+      <div data-ww-edit="home-working-block" data-ww-kind="text" data-ww-label="Text" data-ww-group="Working" id="workingSteps" class="working empty-state">Enter some values, or try an example above, to see the working.</div>
     </section>
 
     <section data-ww-block="home-cache-simulator" class="card simulator-card" id="simulator">
@@ -246,7 +246,7 @@
           </select>
         </label>
         <label class="field simulator-mode-field" for="simPolicy">
-          <span>Replacement</span>
+          <span data-ww-edit="home-cache-simulator-inline-4" data-ww-kind="text" data-ww-label="Text 4" data-ww-group="Cache Simulator">Replacement</span>
           <select id="simPolicy">
             <option value="lru">LRU</option>
             <option value="fifo">FIFO</option>
@@ -259,10 +259,10 @@
 
       <div class="simulator-list">
         <label class="field simulator-list-field" for="simList">
-          <span>Or run a whole list of addresses</span>
+          <span data-ww-edit="home-cache-simulator-inline-5" data-ww-kind="text" data-ww-label="Text 5" data-ww-group="Cache Simulator">Or run a whole list of addresses</span>
           <textarea id="simList" rows="2" spellcheck="false" placeholder="0x00 0x04 0x40 W 0x44 0x00"></textarea>
         </label>
-        <button type="button" id="simRunBtn">Run list from an empty cache</button>
+        <button data-ww-edit="home-cache-simulator-button-4" data-ww-kind="text" data-ww-label="Button text 4" data-ww-group="Cache Simulator" type="button" id="simRunBtn">Run list from an empty cache</button>
       </div>
       <p class="simulator-assumptions">Separate addresses with spaces, commas or new lines. Use hex (0x3F), binary (0b111111) or decimal. Put W before an address to make it a write. <span id="simAssumptions"></span></p>
       <p class="sim-stats" id="simStats" aria-live="polite"></p>
@@ -286,7 +286,7 @@
 
       <section class="sim-panel sim-trace-panel">
         <h3 data-ww-edit="home-cache-simulator-heading-5" data-ww-kind="text" data-ww-label="Heading 5" data-ww-group="Cache Simulator">Trace</h3>
-        <div id="simTrace" class="table-shell trace-shell empty-state">No addresses accessed yet.</div>
+        <div data-ww-edit="home-cache-simulator-block-5-2" data-ww-kind="text" data-ww-label="Text 5" data-ww-group="Cache Simulator" id="simTrace" class="table-shell trace-shell empty-state">No addresses accessed yet.</div>
       </section>
 
       <div class="simulator-panels simulator-primary-panels">
