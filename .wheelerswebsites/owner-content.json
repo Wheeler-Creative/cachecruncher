@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "siteId": "b97ce281-ffaf-4808-b4d6-9778c1d2d95e",
+  "updatedAt": "2026-11-19T18:26:45.980Z",
+  "managedBy": "wheelerswebsites-owner-console",
+  "content": {
+    "version": 1,
+    "values": {
+      "home-hint-text": {
+        "value": "Cache Cruncher is a free online cache and memory simulator for computer architecture students, built by Steve Wheeler. Enter any combination of values you know and Cache Cruncher will derive the bit math automatically. Once the geometry is valid, the Cache Simulator can step through addresses and render visual cache and memory tables.",
+        "kind": "multiline"
+      },
+      "home-seo-content-text-6": {
+        "value": "Built by Steve Wheeler — UTSA student from 2023–2025, built while taking Professor Ortiz’s computer infrastructure class to stay engaged and learn.",
+        "kind": "multiline"
+      }
+    }
+  }
+}
