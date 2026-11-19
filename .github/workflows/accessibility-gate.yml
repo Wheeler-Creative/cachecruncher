@@ -47,9 +47,13 @@ concurrency:
 jobs:
   # On GitHub's machines unless the organisation's AWS_RUNNERS variable lists
   # accessibility-gate; then on a one-job AWS runner that already carries the
-  # browser below. A fork's pull request never gets one.
+  # browser below. A fork's pull request never gets one, and neither does a
+  # public repository: the runner controller refuses those, nothing else takes
+  # the job, and it waits a day and is cancelled (Cache Cruncher, all eight
+  # runs from October 22 to November 19 2026). A public repository's minutes
+  # on GitHub's machines are free.
   accessibility:
-    runs-on: ${{ contains(format(' {0} ', vars.AWS_RUNNERS), ' accessibility-gate ') && (github.event.pull_request.head.repo.full_name || github.repository) == github.repository && fromJSON('["self-hosted","jaybird-aws","jaybird-aws-medium"]') || 'ubuntu-latest' }}
+    runs-on: ${{ contains(format(' {0} ', vars.AWS_RUNNERS), ' accessibility-gate ') && (github.event.pull_request.head.repo.full_name || github.repository) == github.repository && github.event.repository.private && fromJSON('["self-hosted","jaybird-aws","jaybird-aws-medium"]') || 'ubuntu-latest' }}
     # A full scan of a big site is slow: Career Hunter (62 pages) and Roosevelt
     # Library spent 16-18 minutes in the repair step alone and their weekly runs
     # were cut off at the old 20 (2026-10-22). Most of that is the contrast
