@@ -1,8 +1,17 @@
-// CacheCruncher's own server code: the love/death feedback counter in KV. The platform Worker
+// CacheCruncher's own server code: the love/death feedback counter in KV, and the calculator's JSON API
+// (src/solve-api.js, for AI assistants and other programs). The platform Worker
 // (src/worker.js) calls siteRoutes first for every request; returning null hands the request to the
 // platform, which serves the pages and the shared runtime (owner values, checks).
+import { handleOpenApi, handleSolve } from './solve-api.js';
+
 export async function siteRoutes(request, env) {
   const url = new URL(request.url);
+  if (url.pathname === '/api/solve') {
+    return handleSolve(request);
+  }
+  if (url.pathname === '/openapi.json') {
+    return handleOpenApi(request);
+  }
   if (url.pathname === '/api/feedback') {
     return handleFeedback(request, env);
   }

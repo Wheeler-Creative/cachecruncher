@@ -6,7 +6,7 @@
   "description": "Cache Simulator and Memory Simulator for computer architecture students.",
   "scripts": {
     "test": "node --check src/worker.js",
-    "check": "node --check src/worker.js && node --check public/app.js && node scripts/verify-simulator.mjs",
+    "check": "node --check src/worker.js && node --check public/app.js && node --check public/solver.js && node --check src/solve-api.js && node scripts/verify-simulator.mjs && node scripts/verify-solver.mjs",
     "build": "node scripts/compose-site-chrome.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
