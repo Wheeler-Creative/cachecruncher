@@ -12,15 +12,16 @@ import { composeCollectionPage } from './collection-pages-site.js';
 // pages' Book buttons and request forms are shown or hidden as bookings are on or off (bookingPlaces).
 export const CUSTOMER_RUNTIME_VERSION = 11;
 // What a website's pages say they know about bookings (x-ww-scheduler): 1 the Book now menu link and the platform's
-// booking page; 2 the booking page in the website's own look and the pages' booking places. The platform asks a
+// booking page; 2 the booking page in the website's own look and the pages' booking places; 3 the seat map modules the
+// booking page loads for an event with assigned seats (scheduler/seat-map.js, scheduler/seat-picker.js). The platform asks a
 // website below the current version to update itself the first time bookings are saved (src/worker.js ensureRuntime).
-export const SCHEDULER_RENDER_VERSION = 2;
+export const SCHEDULER_RENDER_VERSION = 3;
 const privateHeaders = { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const origins = ['https://jaybirddigital.com', 'https://dev.jaybirddigital.com', 'https://wheelerswebsites-staging.jaybirddigital.workers.dev'];
 // The booking page's bundle is the portal's: its modules and stylesheets are fetched from the platform origin by name.
 const assets = new Set(['customer-account.js', 'customer-account.css', 'customer-session.js', 'customer-login.js', 'guest-auth.js', 'vendor/supabase-js.mjs', 'scheduler-ui.js', 'booking.js', 'booking-ui.js', 'booking.css',
-  'booking-site.css', 'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png']);
+  'booking-site.css', 'scheduler-intake.js', 'scheduler-policy.js', 'scheduler-policy-rules.js', 'scheduler.css', 'portal.css', 'jaybird-logo.png', 'scheduler/seat-map.js', 'scheduler/seat-picker.js', 'scheduler/seat-map.css']);
 // ── Booking partners at the website's own address ──────────────────────────────────────────────────────────────────
 // An outside booking channel (docs/booking-partner-api.md) may call the platform's /booking/v1 or, with the same paths and
 // the same key, the property's own address: https://<website>/_booking-api/booking/v1/... . This hands the call to the
