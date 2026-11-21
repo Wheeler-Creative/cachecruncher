@@ -257,7 +257,10 @@ export async function localLinkIssues(html, route, siteRoot = null, fileOverride
     const raw = $(element).attr("href");
     if (typeof raw !== "string") continue;
     const href = raw.trim();
-    if (BOOKING_PAGE_LINK.test(href) && $(element).attr(BOOKING_LINK_ATTRIBUTE) !== undefined) continue;
+    if (BOOKING_PAGE_LINK.test(href)) {
+      if ($(element).attr(BOOKING_LINK_ATTRIBUTE) === undefined) issues.push(`booking link ${href} needs ${BOOKING_LINK_ATTRIBUTE}`);
+      continue;
+    }
     // Anything with a URI scheme is not a file in this site, so it is not ours
     // to resolve. This was an allowlist of mailto/tel/https, which meant a
     // perfectly good link failed the build for using a scheme nobody had
