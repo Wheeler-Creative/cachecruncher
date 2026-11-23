@@ -13,15 +13,19 @@ import { composeCollectionPage } from "./collection-pages-site.js";
 
 // 1: the page and its menu button. 2: the page's own search title and description (page.title, page.description),
 // so the menu's one word is not the title search results show. 3: a Get tickets link on an item that sells tickets
-// (the snapshot's tickets.url, docs/scheduler/tickets.md). A website's Worker that answers with a lower x-ww-dated
-// is brought up to date through the site runtime upgrade, never through an edit.
-export const DATED_RENDER_VERSION = 3;
+// (the snapshot's tickets.url, docs/scheduler/tickets.md). 4: a Map link beside an item's location (the snapshot's
+// mapUrl, src/collections/event-places.js). A website's Worker that answers with a lower x-ww-dated is brought up to
+// date through the site runtime upgrade, never through an edit.
+export const DATED_RENDER_VERSION = 4;
 
 const escape = (text) => String(text ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const PATH = /^\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/;
 const line = (value, max) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
 // An address a page may link to: a path on this website or an https address, as the snapshot's url is read.
 const linkable = (value) => (/^(?:\/(?!\/)|https:\/\/)/.test(String(value || "")) ? String(value).slice(0, 2000) : "");
+// The Map link: only Google's documented Maps URL, as the platform builds it from a place ID or plain words.
+const MAP = /^https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=[A-Za-z0-9%._~!*'()-]{1,600}(?:&query_place_id=[A-Za-z0-9%._~-]{1,320})?$/;
+const mapLink = (value) => (MAP.test(String(value || "")) ? String(value) : "");
 
 // What the owner chose for the page: its name, its address, whether it is in the menu, and the title and description
 // search results show for it (the name when there is no title). Nothing else from a snapshot is trusted to draw a page.
@@ -41,7 +45,7 @@ export function parseEventsSnapshot(text) {
     const value = typeof text === "string" ? (text ? JSON.parse(text) : null) : text;
     const events = (Array.isArray(value?.events) ? value.events : []).map((event) => ({
       title: line(event?.title, 200), description: String(event?.description || "").slice(0, 2000), location: line(event?.location, 500),
-      url: linkable(event?.url), ticketsUrl: linkable(event?.tickets?.url),
+      url: linkable(event?.url), ticketsUrl: linkable(event?.tickets?.url), mapUrl: mapLink(event?.mapUrl),
       startAt: Date.parse(event?.startAt) ? String(event.startAt) : "", endAt: Date.parse(event?.endAt) ? String(event.endAt) : "",
       allDay: event?.allDay === true, timeZone: String(event?.timeZone || "UTC").slice(0, 100), status: String(event?.status || "confirmed")
     })).filter((event) => event.title && event.startAt && event.status !== "cancelled");
@@ -89,18 +93,18 @@ const when = (event, language) => {
 const STYLE = `<style>.ww-dated{max-width:60rem;margin:0 auto;padding:clamp(1.5rem,4vw,3rem) 1rem}.ww-dated-list{list-style:none;margin:0;padding:0;display:grid;gap:1rem}
 .ww-dated-item{display:grid;grid-template-columns:minmax(6.5rem,auto) 1fr;gap:.25rem 1.25rem;align-items:start;padding:1rem 0;border-top:1px solid color-mix(in srgb,currentColor 18%,transparent)}
 .ww-dated-item:last-child{border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent)}.ww-dated-when{font-weight:600;line-height:1.3}.ww-dated-when small{display:block;font-weight:400;opacity:.8}
-.ww-dated-item h2{margin:0;font-size:1.15rem;line-height:1.3}.ww-dated-item p{margin:.35rem 0 0;opacity:.85}.ww-dated-where{font-size:.95rem}.ww-dated-empty{opacity:.85}
+.ww-dated-item h2{margin:0;font-size:1.15rem;line-height:1.3}.ww-dated-item p{margin:.35rem 0 0;opacity:.85}.ww-dated-where{font-size:.95rem}.ww-dated-map{margin-left:.6rem;white-space:nowrap}.ww-dated-empty{opacity:.85}
 .ww-dated-past{margin-top:2rem}.ww-dated-past summary{cursor:pointer;font-weight:600}.ww-dated-feed{margin-top:1.5rem;font-size:.95rem}
 .ww-dated-item p.ww-dated-tickets{margin-top:.65rem;opacity:1}.ww-dated-tickets a{display:inline-block;padding:.45rem .95rem;border:1px solid currentColor;border-radius:.4rem;font-weight:600;text-decoration:none}
 .ww-dated-tickets a:hover,.ww-dated-tickets a:focus-visible{text-decoration:underline}
 @media(max-width:560px){.ww-dated-item{grid-template-columns:1fr}}</style>`;
 
 const WORDS = {
-  en: { none: "Nothing is scheduled right now. Check back soon.", past: "Past", feed: "Add these dates to your calendar", tickets: "Get tickets" },
-  tr: { none: "Şu anda planlanmış bir şey yok. Yakında tekrar bakın.", past: "Geçmiş", feed: "Bu tarihleri takviminize ekleyin", tickets: "Bilet alın" },
-  de: { none: "Derzeit ist nichts geplant. Schauen Sie bald wieder vorbei.", past: "Vergangene", feed: "Diese Termine in Ihren Kalender übernehmen", tickets: "Tickets holen" },
-  es: { none: "No hay nada programado por ahora. Vuelva pronto.", past: "Pasados", feed: "Añadir estas fechas a su calendario", tickets: "Conseguir entradas" },
-  fr: { none: "Rien n'est prévu pour le moment. Revenez bientôt.", past: "Passés", feed: "Ajouter ces dates à votre agenda", tickets: "Obtenir des billets" }
+  en: { none: "Nothing is scheduled right now. Check back soon.", past: "Past", feed: "Add these dates to your calendar", tickets: "Get tickets", map: "Map" },
+  tr: { none: "Şu anda planlanmış bir şey yok. Yakında tekrar bakın.", past: "Geçmiş", feed: "Bu tarihleri takviminize ekleyin", tickets: "Bilet alın", map: "Harita" },
+  de: { none: "Derzeit ist nichts geplant. Schauen Sie bald wieder vorbei.", past: "Vergangene", feed: "Diese Termine in Ihren Kalender übernehmen", tickets: "Tickets holen", map: "Karte" },
+  es: { none: "No hay nada programado por ahora. Vuelva pronto.", past: "Pasados", feed: "Añadir estas fechas a su calendario", tickets: "Conseguir entradas", map: "Mapa" },
+  fr: { none: "Rien n'est prévu pour le moment. Revenez bientôt.", past: "Passés", feed: "Ajouter ces dates à votre agenda", tickets: "Obtenir des billets", map: "Plan" }
 };
 
 // The page's content: upcoming items first, the recent past under a heading the reader can open, and the calendar
@@ -117,11 +121,14 @@ export function renderDatedFragment(snapshot, { language = "en", now = Date.now(
   // name carries the item's title, so a list of them reads apart to someone hearing the links alone.
   const tickets = (event) => (event.ticketsUrl && stillOn(event)
     ? `<p class="ww-dated-tickets"><a href="${escape(event.ticketsUrl)}" aria-label="${escape(`${words.tickets}: ${event.title}`)}" data-ww-event-tickets>${escape(words.tickets)}</a></p>` : "");
+  // A Map link opens the place in the visitor's own maps. The link's name carries the place, so a list of them reads apart.
+  const map = (event) => (event.mapUrl
+    ? `<a class="ww-dated-map" href="${escape(event.mapUrl)}" target="_blank" rel="noopener" aria-label="${escape(`${words.map}: ${event.location || event.title}`)}" data-ww-event-map>${escape(words.map)}</a>` : "");
   const item = (event) => {
     const { date, time } = when(event, language);
     const title = event.url ? `<a href="${escape(event.url)}">${escape(event.title)}</a>` : escape(event.title);
     return `<li class="ww-dated-item"><div class="ww-dated-when"><time datetime="${escape(event.startAt)}">${escape(date)}</time>${time ? `<small>${escape(time)}</small>` : ""}</div>`
-      + `<div><h2>${title}</h2>${event.location ? `<p class="ww-dated-where">${escape(event.location)}</p>` : ""}${event.description ? `<p>${escape(event.description.slice(0, 400))}</p>` : ""}${tickets(event)}</div></li>`;
+      + `<div><h2>${title}</h2>${event.location || event.mapUrl ? `<p class="ww-dated-where">${escape(event.location)}${map(event)}</p>` : ""}${event.description ? `<p>${escape(event.description.slice(0, 400))}</p>` : ""}${tickets(event)}</div></li>`;
   };
   const body = `<section class="ww-dated" data-ww-event-list data-ww-events-src="/api/events" data-ww-dated-page>`
     + `<header class="ww-collection-head"><h1>${escape(page.label)}</h1></header>`
