@@ -35,6 +35,12 @@ export function isInternalMediaKey(relativeKey) {
 // Imported product pictures were kept beside the site's own before the product folder existed.
 const EARLIER_PRODUCT_PICTURE = /^shop-import-[0-9a-f]{16}-[0-9a-f]{16}\.(?:jpg|png|webp|gif)$/;
 
+// A product review's photo, copied here from the reviews app the shop used (src/commerce/shop-reviews.js): in the
+// reviews folder, or beside the site's own pictures on a website with its own bucket. Like a product picture it belongs
+// to what shows it, never the photo library.
+export const REVIEW_PHOTO_KEY = /^(?:reviews\/|review-)[0-9a-f]{16}-[0-9a-f]{16}\.(?:jpg|png|webp|gif)$/;
+export const isReviewPhotoKey = (relativeKey) => REVIEW_PHOTO_KEY.test(String(relativeKey || ""));
+
 export function isProductPictureKey(relativeKey) {
   const key = String(relativeKey || "");
   if (!key || key.includes("..")) return false;

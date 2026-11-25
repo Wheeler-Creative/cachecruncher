@@ -111,6 +111,44 @@ export function adjustColorForContrast(fgStr, bgStr, minRatio = 4.54) {
   return shouldDarken ? "#000000" : "#ffffff";
 }
 
+// One shade at a time towards black (darken) or white, until the colour reads on bg at minRatio; null if it never does.
+function stepTowards(fg, bg, minRatio, darken) {
+  let { r, g, b } = fg;
+  for (let step = 0; step < 255; step += 1) {
+    if (darken) {
+      r = Math.max(0, Math.floor(r * 0.96));
+      g = Math.max(0, Math.floor(g * 0.96));
+      b = Math.max(0, Math.floor(b * 0.96));
+    } else {
+      r = Math.min(255, Math.ceil(r + (255 - r) * 0.06));
+      g = Math.min(255, Math.ceil(g + (255 - g) * 0.06));
+      b = Math.min(255, Math.ceil(b + (255 - b) * 0.06));
+    }
+    if (contrastRatio({ r, g, b }, bg) >= minRatio) return `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return null;
+}
+
+// THE TEXT MOVES, NEVER ITS BACKGROUND (owner, Nov 24 2026). The nearest shade of the text's own colour that reads on
+// the background it was measured on: darker text gets darker and lighter text lighter, and only when that cannot reach
+// the ratio does it turn the other way (white words on a mid pink become dark). Black or white always reaches WCAG
+// AA's 4.5:1 on any fill, so text can always be repaired without touching the site's colours.
+//
+// The fill used to move instead: TheGlamourAddict's copy (Nov 24 2026) turned every product and blog card from her
+// #ff8091 to a pale #ffd5dc, and her testimonial band to #b55965, to fix a grey maker line, grey prices and white
+// quotes. `reversed` says the text had to turn: such a colour suits only the place it was measured in.
+export function readableTextColour(fgStr, bgStr, minRatio = 4.54) {
+  const fg = parseColor(fgStr);
+  const bg = parseColor(bgStr);
+  if (!fg || !bg) return null;
+  if (contrastRatio(fg, bg) >= minRatio) return { colour: fg.hex, reversed: false };
+  const darker = relativeLuminance(fg) <= relativeLuminance(bg);
+  const own = stepTowards(fg, bg, minRatio, darker);
+  if (own) return { colour: own, reversed: false };
+  const other = stepTowards(fg, bg, minRatio, !darker);
+  return other ? { colour: other, reversed: true } : null;
+}
+
 // ── Extracting Color Information from axe-core Violations ────────────────────
 
 export function extractContrastFailures(violations = []) {
@@ -181,6 +219,18 @@ function sharedClassSubject(selector) {
 const anchored = (selector) => /[#[]/.test(String(selector || ""));
 // Only a colour or fill declared on the class itself is the problem; a path below it names its own elements.
 const reachesWholeClass = (selector) => sharedClassSubject(selector) && !anchored(selector);
+// A rule held to one place on the page: an element's id or a block. Text that had to turn from light to dark (or back)
+// may take its colour from such a rule; a rule for a kind of text anywhere also colours it where the old colour read.
+const namesPlace = (selector) => /#[A-Za-z_-]|\[data-ww-block=/.test(String(selector || ""));
+// A source rule held to the fill it was measured on: what it colours on that fill (or the fill itself), nowhere else.
+// TheGlamourAddict's grey dates (.article__date) failed on her pink cards (.card__info); on her cream article pages the
+// same rule's grey reads, and keeps her colour. Its specificity is the source rule's own. A rule already held to one
+// place (her testimonial band's #QuotesSection) needs no more.
+const onFill = (selector, fill) => {
+  if (!fill || fill === selector || namesPlace(selector)) return selector;
+  const held = `${selector}:where(${fill}, ${fill} *)`;
+  return isSafeOverrideSelector(held) ? held : selector;
+};
 
 // A link inside a paragraph must differ from the text around it by more than colour.
 function linkSelector(target) {
@@ -227,15 +277,11 @@ function contrastRules(violations) {
       // A proved solid fill is not a hidden photo: near-white text on it is simply unreadable.
       if (!fg || !bg || (hiddenBackground(fg, bg) && !node.backgroundRule)) continue;
       const expected = Number(/Expected contrast ratio of ([\d.]+):1/i.exec(summary)?.[1]) || 4.5;
-      const color = adjustColorForContrast(fg, bg, expected + 0.04).toLowerCase();
-      if (contrastRatio(color, bg) < expected) {
-        // The text is already as far from its fill as it goes; the fill moves instead, everywhere it is used.
-        const fill = adjustColorForContrast(bg, fg, expected + 0.04).toLowerCase();
-        if (node.backgroundRule && !reachesWholeClass(node.backgroundRule) && contrastRatio(fill, fg) >= expected) {
-          rules.push({ selector: node.backgroundRule, exact: node.backgroundRule, declaration: `background-color: ${fill}`, sourceRule: true });
-        }
-        continue;
-      }
+      // The failing text takes the nearest shade that reads; the background is the site's own and is never written
+      // (a card's or a band's fill is shared by everything on it, and is the site's look).
+      const readable = readableTextColour(fg, bg, expected + 0.04);
+      if (!readable || contrastRatio(readable.colour, bg) < expected) continue;
+      const color = readable.colour.toLowerCase();
       const measured = targetText(node.colourTarget || node.scopedTarget || node.target);
       const exact = node.colourTarget || node.scopedTarget ? measured : placedTarget(measured, node.html);
       // EVERY FAILING ELEMENT GETS ITS FIX (owner, Nov 11 2026: "Dont let things fail but force it to be fixed"). Where
@@ -243,9 +289,12 @@ function contrastRules(violations) {
       // which nothing else carries, takes the colour instead, so white text over a photo elsewhere keeps its colour.
       const own = ownTarget(node.html);
       const onOwn = () => { if (own) rules.push({ selector: own, exact: own, declaration: `color: ${color} !important` }); };
-      if (node.colourRule && !node.colourTarget) {
+      // A source rule fixes every element it colours in one round. A colour that had to turn (white words made dark)
+      // goes on it only when the rule is held to the measured place; otherwise the measured element takes it below.
+      if (node.colourRule && !node.colourTarget && (!readable.reversed || namesPlace(node.colourRule))) {
         if (reachesWholeClass(node.colourRule)) { onOwn(); continue; }
-        rules.push({ selector: node.colourRule, exact: node.colourRule, declaration: `color: ${color}`, sourceRule: true });
+        const held = onFill(node.colourRule, node.backgroundRule);
+        rules.push({ selector: held, exact: held, declaration: `color: ${color}`, sourceRule: true });
         continue;
       }
       // The colour sits on a class that other elements carry. Only the scan's colourTarget proves each carrier in
@@ -435,28 +484,10 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
       if (contrastRatio(parsedFg, parsedBg) < 4.54) {
         const better = adjustColorForContrast(parsedFg.hex, parsedBg.hex, 4.54);
 
-        // Light text on a mid-tone fill cannot get lighter, so the fill is darkened where it is written.
-        if (contrastRatio(better, parsedBg) < 4.5) {
-          const darker = adjustColorForContrast(parsedBg.hex, parsedFg.hex, 4.54);
-          if (contrastRatio(parsedFg, darker) >= 4.5) {
-            const fillRegex = new RegExp(
-              `((?:background(?:-color)?|--[\\w-]*(?:bg|background)[\\w-]*)\\s*:\\s*)${escapeRegExp(parsedBg.hex)}(?![0-9a-f])`, "gi"
-            );
-            if (fillRegex.test(css)) {
-              css = css.replace(fillRegex, `$1${darker}`);
-              modified = true;
-              changes.push({
-                file: path.relative(publicDir, cssPath),
-                type: "css_fill_contrast",
-                selector: fail.target,
-                before: parsedBg.hex,
-                after: darker,
-                contrastAfter: contrastRatio(parsedFg, darker).toFixed(2)
-              });
-            }
-          }
-          continue;
-        }
+        // Text that cannot reach the ratio by moving further the way it is going (light text on a mid-tone fill) is
+        // never fixed here by moving the fill, which is the site's own colour everywhere it is written: the measured
+        // element's text takes the nearest readable shade instead (contrastRules, below).
+        if (contrastRatio(better, parsedBg) < 4.5) continue;
 
         // Not readable on the page itself: leave the shared value and override the measured element below.
         if (!readsOnPage(better, css)) continue;

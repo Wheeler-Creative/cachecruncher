@@ -31,6 +31,7 @@ import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot,
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
 import { FAQ_PAGE_PATH, FAQ_RENDER_VERSION, addFaqs, parseFaqs, serveFaqPage } from "./faq-site.js";
 import { SIGNUPS_RENDER_VERSION, addSignupForm, parseSignups, signupAsset } from "./signups-site.js";
+import { JOIN_PREFIX, SIGNUP_FORMS_RENDER_VERSION, addSignupForms, parseSignupForms, serveJoinConfirm, serveJoinPage, signupFormsAsset, signupFormsFor } from "./signup-forms-site.js";
 import { CUSTOMER_RUNTIME_VERSION, SCHEDULER_RENDER_VERSION, addCustomerAccountNav, customerAccountRoute, customerAccountSnapshot, partnerApiRoute, webAppRoute, webAppSnapshot, addWebAppEntry } from './site-customer-runtime.js';
 
 // Long enough that a page view does not usually pay for a bucket read, short
@@ -73,6 +74,22 @@ export function resolveContent(response, document, options = {}) {
     if (!transforms.length) return response;
     let rewriter = new HTMLRewriter();
     for (const transform of transforms) {
+      if (typeof transform.text === "function") {
+        // The text arrives in pieces: each is held back until the last, which is replaced by the whole, rewritten.
+        let held = "";
+        rewriter = rewriter.on(transform.selector, {
+          text(chunk) {
+            held += chunk.text;
+            if (!chunk.lastInTextNode) { chunk.remove(); return; }
+            const whole = held;
+            held = "";
+            let next = whole;
+            try { next = String(transform.text(whole)); } catch { next = whole; }
+            chunk.replace(next, { html: true });
+          }
+        });
+        continue;
+      }
       rewriter = rewriter.on(transform.selector, {
         element(element) {
           // One element failing to resolve must not fail the page.
@@ -310,9 +327,11 @@ export function addSiteCredit(response, { shown = true, language = "en" } = {}) 
 }
 
 // Which content rules this Worker runs, for the console to read off any page (see CONTENT_RULES_VERSION).
-export function advertiseRules(response, env) {
+export function advertiseRules(response, env, { signupForms = false } = {}) {
   try {
     const marked = new Response(response.body, response);
+    // Only a Worker that takes sign-ups at /api/join (it passes joinFormCheck) says it draws sign-up forms.
+    if (signupForms) marked.headers.set("x-ww-signup-forms", String(SIGNUP_FORMS_RENDER_VERSION));
     marked.headers.set("x-ww-content", String(CONTENT_RULES_VERSION));
     marked.headers.set("x-ww-newsletter", String(NEWSLETTER_RENDER_VERSION));
     marked.headers.set("x-ww-collections", String(COLLECTIONS_RENDER_VERSION));
@@ -549,6 +568,17 @@ export function withSiteContent(handler, options = {}) {
     if (text !== signupsMemo.text) signupsMemo = { text, settings: parseSignups(text) };
     return signupsMemo.settings;
   };
+  // Sign-up forms (public/signup-forms-site.js): their own pages, the confirmation page, and the forms drawn into pages.
+  // Only a Worker that takes them at /api/join serves them; it says so by passing the forms' bot check.
+  const joins = typeof options.joinFormCheck === "function";
+  const joinCheck = (env, language) => (joins ? String(options.joinFormCheck(env || {}, language) || "") : "");
+  const readSignupForms = siteContentReader({ ...options, key: siteId && joins ? `site-integrations/${siteId}/signup-forms.json` : "" });
+  let signupFormsMemo = { text: null, snapshot: parseSignupForms("") };
+  const signupFormsOf = async (env) => {
+    const text = siteId && joins ? await readSignupForms(env) : "";
+    if (text !== signupFormsMemo.text) signupFormsMemo = { text, snapshot: parseSignupForms(text, siteId) };
+    return signupFormsMemo.snapshot;
+  };
   const readList = (env, list) => {
     if (!listReaders.has(list)) listReaders.set(list, siteContentReader({ ...options, key: `site-integrations/${siteId}/collections/${list}.json` }));
     return listReaders.get(list)(env);
@@ -617,6 +647,20 @@ export function withSiteContent(handler, options = {}) {
       if (siteId) {
         const asset = signupAsset(request);
         if (asset) return asset;
+      }
+      if (siteId && joins) {
+        const asset = signupFormsAsset(request);
+        if (asset) return asset;
+        const joinPath = new URL(request.url).pathname;
+        if (joinPath === JOIN_PREFIX.slice(0, -1) || joinPath.startsWith(JOIN_PREFIX)) {
+          const shell = (path = "/") => handler.fetch(new Request(new URL(path, request.url)), env, ctx);
+          const language = options.language || "en";
+          const confirm = await serveJoinConfirm(request, { siteId, platformOrigin: env.PORTAL_ORIGIN || "https://jaybirddigital.com", shell, language });
+          if (confirm) return confirm;
+          const page = await serveJoinPage(request, await signupFormsOf(env).catch(() => parseSignupForms("")), { shell, language, formCheck: joinCheck(env, language) })
+            .catch(() => null);
+          if (page) return page;
+        }
       }
       const newsletterRoute = new URL(request.url).pathname.startsWith("/newsletter/");
       if (newsletterRoute && siteId) {
@@ -735,9 +779,18 @@ export function withSiteContent(handler, options = {}) {
       }
       // The signup form above the footer, in the page's language; the owner's own heading only on main-language pages.
       // Not on a page the platform reads as written, nor in the editor's view of a page.
-      if (siteId && !asWritten && !preview.highlight) {
+      const signupLanguage = (options.languagePrefixes || []).find((code) => faqPath.startsWith(`/${code}/`) || faqPath === `/${code}`);
+      // The owner's sign-up forms, in the main language they were written in. One that also signs people up for the news
+      // above a page's footer stands in for the news band there.
+      const signupForms = siteId && joins && !asWritten && !preview.highlight && !signupLanguage
+        ? await signupFormsOf(env).catch(() => parseSignupForms("")) : parseSignupForms("");
+      if (signupForms.ready) {
         try {
-          const signupLanguage = (options.languagePrefixes || []).find((code) => faqPath.startsWith(`/${code}/`) || faqPath === `/${code}`);
+          response = addSignupForms(response, signupForms, { pathname: faqPath, language: options.language || "en", formCheck: joinCheck(env, options.language || "en") });
+        } catch { /* the page without its sign-up forms */ }
+      }
+      if (siteId && !asWritten && !preview.highlight && !signupFormsFor(signupForms, faqPath).sections.some((form) => form.joinsNews)) {
+        try {
           response = addSignupForm(response, await signupsFor(env), {
             language: signupLanguage || options.language || "en", mainLanguage: !signupLanguage, pathname: faqPath,
             // The band's own bot check, from the site's Worker (scripts/form-check-rewriter.js): the band is drawn after the
@@ -771,12 +824,12 @@ export function withSiteContent(handler, options = {}) {
         const resolved = Object.keys(own.values).length
           ? resolveContent(base, JSON.stringify(own), { attributes: I18N_ATTRIBUTES })
           : base;
-        return preview.highlight ? markPreviewResponse(resolved) : advertiseRules(resolved, env);
+        return preview.highlight ? markPreviewResponse(resolved) : advertiseRules(resolved, env, { signupForms: joins });
       }
       const resolved = resolveContent(response, content, {
         ...preview, origin: new URL(request.url).origin, images: await imagesFor(env).catch(() => null)
       });
-      if (!preview.highlight) return advertiseRules(resolved, env);
+      if (!preview.highlight) return advertiseRules(resolved, env, { signupForms: joins });
       // A page with an outline drawn on it is not the page: never index it,
       // and never let a cache serve it to somebody who did not ask for it.
       return markPreviewResponse(resolved);

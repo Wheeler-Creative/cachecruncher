@@ -247,6 +247,33 @@ export function fragmentLinkIssues(html) {
 export const BOOKING_PAGE_LINK = /^\/_booking\/?(?:[?#]|$)/;
 export const BOOKING_LINK_ATTRIBUTE = "data-ww-booking-link";
 
+// THE STORE'S OWN PAGES. A website with a store has pages its own server draws, with no file behind them: the store page
+// (/shop/), each collection the published store names, and on a copied shop each product at its old address
+// (/products/<handle>/). A link to one is a link to a page that exists. This is the map localLinkIssues takes as
+// fileOverrides: each page's index.html counted as present. An edit is told its store's pages by the platform
+// (site_store_pages, scripts/edits/process-request.mjs); a migration reads them from its blueprint (migrationStorePages).
+export function storePageFiles(pages, root = process.cwd()) {
+  const base = path.resolve(root, "public");
+  const files = new Map();
+  for (const page of Array.isArray(pages) ? pages : []) {
+    if (typeof page !== "string" || !/^\/[a-z0-9]/i.test(page)) continue;
+    const file = path.resolve(base, page.replace(/^\/+/, ""), "index.html");
+    if (file.startsWith(base + path.sep)) files.set(file, true);
+  }
+  return files;
+}
+
+// A migration's store pages, from its blueprint's data collections: the store, cart and checkout pages when the copy has
+// a store (the addresses the platform keeps for it, src/collections/site-data-collections.js RESERVED_PATHS), and every
+// product the store serves at the source's own address. Since products became the store's (PR #929) they are no longer
+// written as pages, so the copied pages' links to them, and the header's Shop link, were refused as missing links and
+// the whole copy failed at its last check (TheGlamourAddict on staging, Nov 23 2026).
+export function migrationStorePages(dataCollections) {
+  const products = (Array.isArray(dataCollections?.productRoutes) ? dataCollections.productRoutes : [])
+    .map((entry) => entry?.path).filter((route) => typeof route === "string");
+  return dataCollections?.commerceStore === true || products.length ? ["/shop/", "/cart/", "/checkout/", ...products] : [];
+}
+
 export async function localLinkIssues(html, route, siteRoot = null, fileOverrides = null) {
   // Without a site root there is no tree to resolve against, so link
   // existence cannot be judged - the other checks still can.

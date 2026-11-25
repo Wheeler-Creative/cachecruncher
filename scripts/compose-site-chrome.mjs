@@ -8984,7 +8984,9 @@ function normalizeSeo(raw) {
   const gtm = GTM_ID.test(String(raw.gtm ?? "").trim().toUpperCase()) ? String(raw.gtm).trim().toUpperCase() : "";
   const pinterest = PINTEREST_TOKEN.test(String(raw.pinterest ?? "").trim().toLowerCase()) ? String(raw.pinterest).trim().toLowerCase() : "";
   const facebook = FACEBOOK_TOKEN.test(String(raw.facebook ?? "").trim().toLowerCase()) ? String(raw.facebook).trim().toLowerCase() : "";
-  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook) return null;
+  const sameAs = normalizeSameAs(raw.sameAs);
+  const sameAsAt = sameAs.length && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(String(raw.sameAsAt ?? "")) ? String(raw.sameAsAt) : "";
+  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook && !sameAs.length) return null;
   return {
     ...googleMeta.length ? { googleMeta } : {},
     ...googleFile.length ? { googleFile } : {},
@@ -8992,8 +8994,39 @@ function normalizeSeo(raw) {
     ...ga4 ? { ga4 } : {},
     ...gtm ? { gtm } : {},
     ...pinterest ? { pinterest } : {},
-    ...facebook ? { facebook } : {}
+    ...facebook ? { facebook } : {},
+    ...sameAs.length ? { sameAs } : {},
+    ...sameAsAt ? { sameAsAt } : {}
   };
+}
+var MAX_SAME_AS = 12;
+function sameAsKey(raw) {
+  let url;
+  try {
+    url = new URL(String(raw ?? "").trim());
+  } catch {
+    return "";
+  }
+  if (!["http:", "https:"].includes(url.protocol)) return "";
+  const host = url.hostname.toLowerCase().replace(/^(?:www|m|mobile)\./, "");
+  const path5 = url.pathname.replace(/\/+$/, "") || "";
+  const pick = (names) => names.filter((name) => url.searchParams.get(name)).map((name) => `${name}=${url.searchParams.get(name)}`).join("&");
+  const query = /(^|\.)facebook\.com$/.test(host) && /^\/profile\.php$/i.test(path5) ? pick(["id"]) : /(^|\.)google\.[a-z.]+$/.test(host) ? pick(["q", "cid", "query_place_id"]) : /^maps\.apple(\.com)?$/.test(host) ? pick(["place-id", "auid", "q", "address", "ll"]) : "";
+  return `${host}${path5.toLowerCase()}${query ? `?${query}` : ""}`;
+}
+var brokenLink = (url) => /^facebook\.com\/profile\.php$/.test(sameAsKey(url));
+function normalizeSameAs(list2) {
+  const seen = /* @__PURE__ */ new Set();
+  const kept = [];
+  for (const item of Array.isArray(list2) ? list2 : []) {
+    const url = String(item ?? "").trim();
+    const key = sameAsKey(url);
+    if (!/^https:\/\//i.test(url) || url.length > 500 || !key || brokenLink(url) || seen.has(key)) continue;
+    seen.add(key);
+    kept.push(url);
+    if (kept.length >= MAX_SAME_AS) break;
+  }
+  return kept;
 }
 var ALT_MAX = 300;
 function normalizeAlt(raw) {

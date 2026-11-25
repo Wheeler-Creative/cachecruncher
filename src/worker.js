@@ -24,6 +24,11 @@ const PRODUCTS_JSON_KEY = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95
 const STORE_FILES_PREFIX = "site-integrations/b97ce281-ffaf-4808-b4d6-9778c1d2d95e/products/";
 const STORE_NO_IMAGE = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"/><circle cx=\"9\" cy=\"10\" r=\"2\"/><path d=\"m21 16-5-5-9 9\"/></svg><span>No image</span>";
 const COMMERCE_PRODUCT_PATHS = [];
+// The source shop's own product page, which the store fills (product-template-runtime.mjs); null draws the store's own.
+const STORE_PRODUCT_TEMPLATE = null;
+// The source shop's own product cards, cart page and where it linked its policies (source-product-card-lib.mjs); null
+// draws the store's own.
+const STORE_SHOP_THEME = null;
 const PENDING_COLLECTION_SOURCES = {};
 const SUBSCRIBERS_CONFIGURED = false;
 const SHOP_PAGE_DESIGNED = false;
@@ -74,10 +79,11 @@ async function managedFormCheck(body, env, request, action) {
   return check?.status ? check : null;
 }
 
-// The footer signup band is drawn by the content layer after the page's forms were given their check, so it asks here.
-function signupFormCheck(env, language) {
+// The footer signup band and the sign-up forms are drawn by the content layer after the page's forms were given their
+// check, so they ask here: "subscribe" for the band, "join" for the forms (handleSignupJoin checks that action).
+function signupFormCheck(env, language, action = "subscribe") {
   const settings = formCheckSettings(env);
-  return settings && !settings.incomplete ? formCheckFields(settings, "subscribe", language) + formCheckLoader(settings) : "";
+  return settings && !settings.incomplete ? formCheckFields(settings, action, language) + formCheckLoader(settings) : "";
 }
 
 // What the address does not say and the answer depends on. An iPad's screen is not a phone's, though an older one says
@@ -694,14 +700,24 @@ function projectShopCatalog(snapshot, params) {
   }
   let entries = [...groups.values()];
   const amount = (group) => Math.min(...group.filter((row) => row.priceAmount != null && Number.isFinite(Number(row.priceAmount))).map((row) => Number(row.priceAmount)));
-  // The shopper's choice, else the first order the owner chose for the filter bar (storeDisplay.defaultSort), else by name.
-  const sort = params.get("sort") || snapshot.storeDisplay?.defaultSort || "name";
+  // The shopper's choice, else the first order the owner chose for the filter bar (storeDisplay.defaultSort), else the
+  // list's own: a list copied from another site asks for that site's order (order=source), any other is by name.
+  const sort = params.get("sort") || snapshot.storeDisplay?.defaultSort || (params.get("order") === "source" ? "source" : "") || "name";
   const byTitle = (a, b) => String(a[0].title).localeCompare(String(b[0].title));
+  // The source's order: each product's place in this list's collection on the site it was copied from, or in its list of
+  // all products for a list of everything (TheGlamourAddict's hand-ordered /collections/frontpage/, Nov 23 2026). What
+  // the source did not list (added since, or never seen) follows, by name.
+  const places = sort === "source" ? new Map(entries.map((group) => [group, Math.min(...group.map((row) => {
+    const at = category === "*" ? row.catalog?.position
+      : (row.catalog?.categories || []).find((item) => route(item.path || item.label) === route(category))?.position;
+    return Number.isSafeInteger(at) ? at : Infinity;
+  }))])) : null;
   // Newest: when the product was added. Order-by date: the next cutoff still open first; closed or undated ones last.
   const when = (group) => sort === "newest"
     ? Math.max(...group.map((row) => Date.parse(row.createdAt || "") || -Infinity))
     : Math.min(...group.map((row) => { const at = Date.parse(row.catalog?.orderCutoffAt || ""); return at > Date.now() ? at : Infinity; }));
   entries.sort((a, b) => {
+    if (places) { const left = places.get(a), right = places.get(b); return left === right ? byTitle(a, b) : left < right ? -1 : 1; }
     if (sort === "name-desc") return byTitle(b, a);
     if (sort === "newest" || sort === "cutoff") {
       const left = when(a), right = when(b);
@@ -731,7 +747,10 @@ function projectShopCatalog(snapshot, params) {
     }
     return { priceRanges: [...currencies].map(([currency, values]) => ({ currency, low: Math.min(...values), high: Math.max(...values) })),
       id: row.id, sourceKey: row.sourceKey, sourcePath: row.sourcePath, categoryPath: row.categoryPath,
-      title: row.title, imageUrl: row.imageUrl || row.catalog?.images?.[0]?.url,
+      // The product's own picture where it keeps one apart from its options' (catalog.productImage), else its first row's.
+      title: row.title, imageUrl: row.catalog?.productImage || row.imageUrl || row.catalog?.images?.[0]?.url,
+      // Its published reviews' average and count (docs/commerce/product-reviews.md), for the card's stars.
+      ...(row.rating?.count > 0 ? { rating: { average: row.rating.average, count: row.rating.count } } : {}),
       // A gallery has no product pages, so its cards carry the whole description, not the first few words.
       ...((gallery || layout.parts.includes("summary")) && row.description ? { summary: (() => {
         const text = String(row.description).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
@@ -742,8 +761,15 @@ function projectShopCatalog(snapshot, params) {
       ...(layout.details.length ? { details: Object.fromEntries(layout.details.map((name) => [name, [].concat(attributesOf(row)[name] ?? []).map(String).filter(Boolean)]).filter(([, values]) => values.length)) } : {}),
       priceHighAmount: amounts.length ? Math.max(...amounts) : null,
       regularPriceAmount: row.regularPriceAmount, onSale: displayed.some(variant => variant.onSale),
+      // Every option on sale from one regular price (a Shopify product's sizes, each with the same compare-at
+      // price): the card can show that price crossed out. Options at different regular prices, or only some on
+      // sale, never are.
+      ...(displayed.length > 1 && displayed.every((variant) => variant.onSale && variant.regularPriceAmount != null
+        && variant.currency === row.currency && Number(variant.regularPriceAmount) === Number(row.regularPriceAmount)) ? { regularShared: true } : {}),
       catalog: { saleType: row.catalog?.saleType, orderCutoffAt: row.catalog?.orderCutoffAt, orderCutoffTimeZone: row.catalog?.orderCutoffTimeZone,
-        releaseAt: row.catalog?.releaseAt, releaseDate: row.catalog?.releaseDate, ...(row.catalog?.inStoreOnly === true ? { inStoreOnly: true } : {}) },
+        releaseAt: row.catalog?.releaseAt, releaseDate: row.catalog?.releaseDate, ...(row.catalog?.inStoreOnly === true ? { inStoreOnly: true } : {}),
+        // Its maker, for a card that shows it (a copied Shopify theme's vendor line, product-card-runtime.mjs).
+        ...(row.catalog?.brand ? { brand: row.catalog.brand } : {}) },
       orderingClosed: group.every((variant) => variant.orderingClosed),
       currency: row.currency, active: group.some((variant) => variant.active),
       purchasable: group.some((variant) => variant.active && variant.purchasable), variantCount: group.length
@@ -756,6 +782,347 @@ function projectShopCatalog(snapshot, params) {
   } };
 }
 
+
+function productTemplateMoney(amount, currency, format) {
+  if (amount === null || amount === undefined || amount === "" || !Number.isFinite(Number(amount)) || !currency) return "";
+  const code = String(currency).toUpperCase();
+  let digits = 2;
+  try { digits = new Intl.NumberFormat("en-US", { style: "currency", currency: code }).resolvedOptions().maximumFractionDigits; }
+  catch { return ""; }
+  const major = Number(amount) / Math.pow(10, digits);
+  if (!format || String(format.currency || "").toUpperCase() !== code) {
+    try { return new Intl.NumberFormat("en-US", { style: "currency", currency: code }).format(major); } catch { return ""; }
+  }
+  const fraction = format.fraction === 0 && Math.round(major * 100) % 100 !== 0 ? 2 : Number.isInteger(format.fraction) ? format.fraction : digits;
+  const parts = major.toFixed(fraction).split(".");
+  const whole = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, typeof format.thousands === "string" ? format.thousands : ",");
+  return String(format.prefix || "") + whole + (parts[1] ? String(format.decimal || ".") + parts[1] : "") + String(format.suffix || "");
+}
+function descriptionFrameSource(value) {
+  const src = String(value ?? "").trim();
+  return /^https:\/\/(?:(?:www\.)?giphy\.com\/embed\/[A-Za-z0-9]+(?:\/video)?|(?:www\.)?youtube(?:-nocookie)?\.com\/embed\/[A-Za-z0-9_-]{6,20}|player\.vimeo\.com\/video\/\d{4,12})(?:\?[^\s"'<>\\#]*)?$/.test(src) ? src : "";
+}
+function productDescriptionHtml(description, rich) {
+  if (!rich || typeof rich !== "object" || typeof rich.html !== "string" || typeof rich.text !== "string") return "";
+  const plain = (value) => String(value ?? "").replace(/\r\n?/g, "\n").trim();
+  const html = rich.html;
+  if (!html.trim() || html.length > 60000 || !plain(rich.text) || plain(rich.text) !== plain(description)) return "";
+  const shapes = { p: "", div: "", br: "", hr: "", h1: "", h2: "", h3: "", h4: "", h5: "", h6: "", ul: "", ol: "start type", li: "",
+    strong: "", b: "", em: "", i: "", u: "", s: "", sub: "", sup: "", small: "", blockquote: "", table: "", caption: "", thead: "",
+    tbody: "", tfoot: "", tr: "", th: "colspan rowspan", td: "colspan rowspan", a: "href", img: "src alt width height loading decoding",
+    iframe: "src width height title allowfullscreen frameborder loading style" };
+  const empty = { br: true, hr: true, img: true };
+  // The markup as the migration wrote it: an attribute's value escapes only & and ", as &amp; and &quot;.
+  const decoded = (value) => value.replace(/&quot;/g, "\"").replace(/&amp;/g, "&");
+  const fits = {
+    href: (value) => /^(?:\/(?![/\\])|https?:\/\/[^/\\]|mailto:|tel:)[^\s\\]*$/i.test(value),
+    src: (value) => /^\/images\/[^\s\\]+$/.test(value),
+    "iframe src": (value) => descriptionFrameSource(value) === value,
+    alt: () => true,
+    title: (value) => /\S/.test(value),
+    width: (value) => /^\d{1,5}$/.test(value), height: (value) => /^\d{1,5}$/.test(value),
+    colspan: (value) => /^\d{1,3}$/.test(value), rowspan: (value) => /^\d{1,3}$/.test(value), start: (value) => /^\d{1,6}$/.test(value),
+    type: (value) => /^[1aAiI]$/.test(value), loading: (value) => value === "lazy" || value === "eager",
+    decoding: (value) => value === "async" || value === "sync" || value === "auto",
+    allowfullscreen: (value) => value === "", frameborder: (value) => value === "0" || value === "1",
+    // An embed's size as its owner set it, scaled down to a narrower screen (written by the migration, never copied).
+    style: (value) => /^width:100%;max-width:\d{1,5}px;height:auto;aspect-ratio:\d{1,5}\/\d{1,5}$/.test(value)
+  };
+  const open = [];
+  let fine = true;
+  // An embed holds nothing: its closing tag follows its opening tag at once.
+  let frameEnd = -1;
+  const rest = html.replace(/<(\/?)([a-z][a-z0-9]*)((?:\s+[a-z-]+="[^"<>]*")*)\s*(\/?)>/g, (match, closing, name, attributes, selfClosing, offset) => {
+    if (frameEnd >= 0 && (!closing || name !== "iframe" || offset !== frameEnd)) fine = false;
+    frameEnd = -1;
+    if (!Object.prototype.hasOwnProperty.call(shapes, name)) { fine = false; return ""; }
+    if (closing) {
+      if (attributes || selfClosing || empty[name] || open.pop() !== name) fine = false;
+      return "";
+    }
+    if (selfClosing && !empty[name]) fine = false;
+    if (!empty[name]) open.push(name);
+    if (name === "iframe") frameEnd = offset + match.length;
+    const allowed = shapes[name].split(" ");
+    const seen = {};
+    for (const found of attributes.matchAll(/\s+([a-z-]+)="([^"<>]*)"/g)) {
+      const attribute = found[1];
+      const check = fits[name + " " + attribute] || fits[attribute];
+      if (!allowed.includes(attribute) || seen[attribute] || /&(?!amp;|quot;)/.test(found[2]) || !check(decoded(found[2]))) fine = false;
+      seen[attribute] = true;
+    }
+    if (name === "iframe" && (!seen.src || !seen.title)) fine = false;
+    return "";
+  });
+  return fine && frameEnd < 0 && !open.length && !/[<>]/.test(rest) ? html : "";
+}
+function productTemplateDescription(text, rich) {
+  const formatted = productDescriptionHtml(text, rich);
+  if (formatted) return formatted;
+  const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]);
+  // A bullet alone on its line belongs to the words under it (a description kept before Nov 24 2026 has them so).
+  return String(text || "").replace(/\r\n?/g, "\n").replace(/^([ \t]*•)[ \t]*\n(?=[ \t]*[^\s•])/gm, "$1 ").trim().split(/\n{2,}/).map((block) => {
+    let html = "";
+    let list = [];
+    let lines = [];
+    const flushList = () => { if (list.length) html += "<ul>" + list.map((item) => "<li>" + escape(item) + "</li>").join("") + "</ul>"; list = []; };
+    const flushLines = () => { if (lines.length) html += "<p>" + lines.map(escape).join("<br>") + "</p>"; lines = []; };
+    for (const line of block.split("\n")) {
+      const item = line.match(/^\s*•\s?(.*)$/);
+      if (item) { flushLines(); list.push(item[1].trim()); } else if (line.trim()) { flushList(); lines.push(line.trim()); }
+    }
+    flushLines();
+    flushList();
+    return html;
+  }).join("");
+}
+function renderProductTemplate(template, rows, context) {
+  const options = context || {};
+  if (!template || template.version !== 1 || typeof template.html !== "string" || !template.html.includes("{{ww:title}}")) return "";
+  // A row the store lists twice (a source row and the live one) is one row: the later one is current.
+  const byId = new Map();
+  (Array.isArray(rows) ? rows : []).filter((row) => row && typeof row === "object").forEach((row, index) => byId.set(row.id ?? "row-" + index, row));
+  const all = Array.from(byId.values());
+  if (!all.length) return "";
+  const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]);
+  const activeRows = all.filter((row) => row.active);
+  const variants = activeRows.length ? activeRows : all;
+  const product = variants[0];
+  // The option chosen as the page opens: as Shopify's selected_or_first_available_variant, the first one that can be
+  // bought, else the first. While none is on sale here (a copied shop not yet selling), the first its old shop had
+  // in stock; else the first. The rows come in the shop's order (orderProductOptions), so its picture is the one
+  // the page shows.
+  const selected = variants.find((row) => row.active && row.purchasable)
+    || (activeRows.length ? null : variants.find((row) => row.sourceAvailability === "available")) || product;
+  const selling = options.mode === "shop";
+  const money = (amount) => productTemplateMoney(amount, product.currency, template.money);
+  const local = (url) => (url.startsWith("/") && !url.startsWith("//")) || url.startsWith("https://");
+  const sized = (url, width) => url.startsWith("/images/") ? url + (url.includes("?") ? "&" : "?") + "w=" + width : url;
+
+  // The product's pictures, in the store's order; an option's own picture first when it is the one chosen.
+  const pictures = [];
+  const addPicture = (url, alt) => {
+    const value = String(url || "");
+    if (!value || !local(value) || pictures.some((entry) => entry.url === value)) return;
+    pictures.push({ url: value, alt: String(alt || "") });
+  };
+  for (const image of product.catalog?.images || []) addPicture(image?.url, image?.alt);
+  addPicture(product.imageUrl, "");
+  // An option's own picture: its row's, or the one its catalog keeps apart (optionImage: a product that is its one
+  // option, whose own picture is the product's first, as lists show it, and its option's another - TheGlamourAddict's
+  // satin bonnet, Nov 24 2026), while that is one of the product's pictures.
+  const optionPicture = (row) => {
+    const kept = String(row.catalog?.optionImage || "");
+    return kept && pictures.some((entry) => entry.url === kept) ? kept : String(row.imageUrl || "");
+  };
+  // The options' own pictures (catalog images marked variant). A theme that shows them only as the chosen option's
+  // picture lists the others apart (Narrative's pictures under the product: TheGlamourAddict, Nov 24 2026): its
+  // template's list repeats otherImages. A picture that no option shows is never left out.
+  const optionPictures = new Set();
+  for (const row of all) {
+    for (const image of row.catalog?.images || []) {
+      if (image?.variant === true && all.some((other) => optionPicture(other) === String(image.url || ""))) optionPictures.add(String(image.url));
+    }
+  }
+  const otherPictures = pictures.filter((entry) => !optionPictures.has(entry.url));
+  const lists = Array.isArray(template.lists) ? template.lists : [];
+  const picture = (entry, index) => {
+    const view = { src: sized(entry.url, 1200), thumb: sized(entry.url, 600), full: entry.url,
+      alt: entry.alt || product.title || "", position: String(index + 1) };
+    lists.forEach((list, number) => { view["listClass-" + number] = index === 0 ? String(list.first || "") : String(list.rest || ""); });
+    return view;
+  };
+  // A list whose class names how many pictures it holds (Narrative's product__subimage-list--r1: four pictures, one
+  // past a row of three) names it for the pictures it holds here.
+  const counts = {};
+  lists.forEach((list, number) => {
+    const modulo = Number(list?.count?.modulo);
+    if (Number.isInteger(modulo) && modulo >= 2) counts["listCount-" + number] = String((list.pictures === "others" ? otherPictures : pictures).length % modulo);
+  });
+  const chosen = optionPicture(selected);
+  const chosenPicture = chosen && local(chosen) ? { url: chosen, alt: pictures.find((entry) => entry.url === chosen)?.alt || "" } : pictures[0];
+
+  // Choices: one per option name, its values in the store's order; a product whose options have no names (an older
+  // import) chooses among its rows.
+  const names = [];
+  for (const row of variants) for (const name of Object.keys(row.variantOptions || {})) if (name && !names.includes(name)) names.push(name);
+  let choices = [];
+  if (variants.length > 1 && names.length) {
+    choices = names.map((name, index) => {
+      const values = [];
+      for (const row of variants) {
+        const value = row.variantOptions?.[name];
+        if (value !== undefined && value !== null && String(value) !== "" && !values.includes(String(value))) values.push(String(value));
+      }
+      const current = String(selected.variantOptions?.[name] ?? values[0] ?? "");
+      return { name, id: "ww-option-" + (index + 1),
+        values: values.map((value) => '<option value="' + escape(value) + '"' + (value === current ? " selected" : "") + ">" + escape(value) + "</option>").join(""),
+        choices: values.map((value, number) => ({ value, choiceId: "ww-option-" + (index + 1) + "-" + (number + 1), "flag-checked": value === current ? " checked" : "" })) };
+    }).filter((choice) => choice.choices.length);
+  } else if (variants.length > 1) {
+    choices = [{ name: "", id: "ww-option-1",
+      values: variants.map((row) => '<option value="' + escape(row.id) + '"' + (row === selected ? " selected" : "") + ">" + escape(row.variantLabel || row.variantKey || "Standard") + "</option>").join(""),
+      choices: variants.map((row, number) => ({ value: String(row.id), choiceId: "ww-option-1-" + (number + 1), "flag-checked": row === selected ? " checked" : "" })) }];
+  }
+  // A template captured from a product with no choices has nowhere to put them: the platform's own picker stands in
+  // before the add to cart button.
+  const fallback = choices.length && !template.html.includes("{{#ww:options}}")
+    ? choices.map((choice) => '<label class="ww-store-variant-label">' + escape(choice.name || "Choose an option")
+      + ' <select class="ww-store-variant-select" data-ww-product-part="option" data-ww-product-option="' + escape(choice.name) + '">' + choice.values + "</select></label>").join("")
+    : "";
+
+  const orderable = selling && selected.active && selected.purchasable && !selected.orderingClosed && selected.catalog?.inStoreOnly !== true;
+  const addLabel = !selling || orderable
+    ? (selected.catalog?.saleType === "preorder" ? "Pre-order" : String(template.addLabel || "Add to cart"))
+    : selected.catalog?.inStoreOnly === true ? "Available in our shop" : !selected.active ? "Unavailable" : "Sold out";
+  const onSale = Boolean(selected.onSale) && selected.regularPriceAmount !== null && selected.regularPriceAmount !== undefined;
+  const price = money(selected.priceAmount);
+  const vendor = String(product.catalog?.brand || "");
+  const page = String(options.origin || "") + String(options.path || "");
+  const firstPicture = pictures[0] ? (local(pictures[0].url) && pictures[0].url.startsWith("/") ? String(options.origin || "") + pictures[0].url : pictures[0].url) : "";
+  const title = String(product.title || "");
+  const encode = encodeURIComponent;
+  const view = {
+    path: String(options.path || ""),
+    title,
+    vendor,
+    price,
+    compare: onSale ? money(selected.regularPriceAmount) : "",
+    saleClass: onSale && template.sale?.className ? " " + template.sale.className : "",
+    description: productTemplateDescription(product.description, product.catalog?.richDescription),
+    images: pictures.map(picture),
+    otherImages: otherPictures.map(picture),
+    ...counts,
+    image: chosenPicture ? picture(chosenPicture, 0) : null,
+    options: choices,
+    optionsFallback: fallback,
+    variants: variants.map((row) => '<option value="' + escape(row.id) + '"' + (row === selected ? ' selected="selected"' : "")
+      + ">" + escape((row.variantLabel || row.variantKey || "Default") + (money(row.priceAmount) ? " - " + money(row.priceAmount) : "")) + "</option>").join(""),
+    variantId: String(selected.id || ""),
+    addLabel,
+    selling,
+    "flag-disabled": orderable ? "" : " disabled",
+    "flag-compare": onSale ? "" : " hidden",
+    "flag-vendor": vendor ? "" : " hidden",
+    "flag-mode": selling ? "" : ' data-ww-store-mode="' + (options.mode === "catalog" ? "catalog" : "gallery") + '"',
+    "share-facebook": "https://www.facebook.com/sharer.php?u=" + encode(page),
+    "share-twitter": "https://twitter.com/share?text=" + encode(title) + "&url=" + encode(page),
+    "share-pinterest": "https://pinterest.com/pin/create/button/?url=" + encode(page) + (firstPicture ? "&media=" + encode(firstPicture) : "") + "&description=" + encode(title),
+    "share-linkedin": "https://www.linkedin.com/sharing/share-offsite/?url=" + encode(page),
+    "share-email": "mailto:?subject=" + encode(title) + "&body=" + encode(page),
+    "share-whatsapp": "https://wa.me/?text=" + encode(title + " " + page)
+  };
+
+  // A small part of Mustache: {{#ww:name}}…{{/ww:name}} repeats for a list, shows once for a value and not at all
+  // for none; {{ww:name}} is escaped text; {{{ww:name}}} is markup made above. One pass over the template, so a
+  // product's own words are never read as a mark.
+  const TOKEN = /\{\{#ww:([\w-]+)\}\}([\s\S]*?)\{\{\/ww:\1\}\}|\{\{\{ww:([\w-]+)\}\}\}|\{\{ww:([\w-]+)\}\}/g;
+  const lookup = (stack, name) => {
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      if (stack[index] && typeof stack[index] === "object" && Object.prototype.hasOwnProperty.call(stack[index], name)) return stack[index][name];
+    }
+    return undefined;
+  };
+  const fill = (text, stack, depth) => text.replace(TOKEN, (_, section, inner, raw, plain) => {
+    if (section) {
+      const value = lookup(stack, section);
+      if (depth > 6) return "";
+      if (Array.isArray(value)) return value.map((item) => fill(inner, stack.concat([item]), depth + 1)).join("");
+      if (value && typeof value === "object") return fill(inner, stack.concat([value]), depth + 1);
+      return value ? fill(inner, stack, depth + 1) : "";
+    }
+    if (raw) { const value = lookup(stack, raw); return value === undefined || value === null ? "" : String(value); }
+    const value = lookup(stack, plain);
+    return value === undefined || value === null || typeof value === "object" ? "" : escape(value);
+  });
+  return fill(template.html, [view], 0);
+}
+function renderProductCardList(template, groups, context) {
+  const options = context || {};
+  if (!template || template.version !== 1 || !template.card || typeof template.container !== "string" || !template.container.includes("{{{ww:cards}}}")) return "";
+  const regular = typeof template.card.regular === "string" ? template.card.regular : "";
+  const sale = typeof template.card.sale === "string" ? template.card.sale : "";
+  if (!regular && !sale) return "";
+  const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]);
+  const local = (url) => (url.startsWith("/") && !url.startsWith("//")) || url.startsWith("https://");
+  const sized = (url, width) => url.startsWith("/images/") ? url + (url.includes("?") ? "&" : "?") + "w=" + width : url;
+  // The same small part of Mustache the product page uses (renderProductTemplate): {{#ww:name}}…{{/ww:name}} shows for a
+  // value, {{ww:name}} is escaped text, {{{ww:name}}} markup made here. One pass, so a product's own words are never a mark.
+  const TOKEN = /\{\{#ww:([\w-]+)\}\}([\s\S]*?)\{\{\/ww:\1\}\}|\{\{\{ww:([\w-]+)\}\}\}|\{\{ww:([\w-]+)\}\}/g;
+  const fill = (text, view) => text.replace(TOKEN, (_, section, inner, raw, plain) => {
+    if (section) return view[section] ? fill(inner, view) : "";
+    if (raw) return view[raw] === undefined || view[raw] === null ? "" : String(view[raw]);
+    const value = view[plain];
+    return value === undefined || value === null || typeof value === "object" ? "" : escape(value);
+  });
+
+  const cards = (Array.isArray(groups) ? groups : []).map((group) => (Array.isArray(group) ? group : [group]).filter((row) => row && typeof row === "object"))
+    .filter((rows) => rows.length).map((rows, index) => {
+      const product = rows[0];
+      const amounts = rows.flatMap((row) => [row.priceAmount, row.priceHighAmount]).filter((value) => value !== null && value !== undefined && Number.isFinite(Number(value))).map(Number);
+      const low = amounts.length ? Math.min(...amounts) : null;
+      const high = amounts.length ? Math.max(...amounts) : null;
+      const money = (amount) => productTemplateMoney(amount, product.currency, template.money);
+      // The regular price crossed out only where it is the product's own: one option, or every option on sale from it.
+      const regularAmount = product.regularPriceAmount;
+      const crossed = Boolean(product.onSale) && regularAmount !== null && regularAmount !== undefined && Number(regularAmount) > Number(low)
+        && (!(product.variantCount > 1) || product.regularShared === true);
+      const picture = String(product.imageUrl || product.catalog?.images?.[0]?.url || "");
+      const price = low === null ? "" : (high !== null && high > low ? String(template.fromLabel || "From ") : "") + money(low);
+      const view = {
+        index: String(index),
+        key: String(product.id || product.sourceKey || index).replace(/[^\w-]/g, ""),
+        href: /^\/[^/\\]/.test(String(product.sourcePath || "")) ? String(product.sourcePath) : "/shop/",
+        title: String(product.title || ""),
+        alt: String(product.title || ""),
+        vendor: String(product.catalog?.brand || ""),
+        price,
+        compare: crossed ? money(regularAmount) : "",
+        onSale: crossed,
+        image: Boolean(picture && local(picture)),
+        src: picture && local(picture) ? sized(picture, 720) : ""
+      };
+      return fill(crossed && sale ? sale : regular || sale, view);
+    });
+  if (!cards.length) return "";
+  // A theme that deals its cards into columns (Narrative's masonry) gets them dealt the same way: the first card in the
+  // first column, the second in the second, and so on along each row. One product has the source's own column for one.
+  const column = template.column && typeof template.column.html === "string" && template.column.html.includes("{{{ww:cards}}}") ? template.column : null;
+  let inner = cards.join("");
+  if (column) {
+    const one = cards.length === 1 && typeof column.single === "string" && column.single.includes("{{{ww:cards}}}");
+    const most = Math.max(1, Math.min(8, Number(column.count) || 1));
+    const count = one ? 1 : Math.max(1, Math.min(most, Number(options.columns) || most));
+    const dealt = Array.from({ length: count }, () => []);
+    cards.forEach((card, index) => dealt[index % count].push(card));
+    inner = dealt.map((list) => (one ? column.single : column.html).split("{{{ww:cards}}}").join(list.join(""))).join("");
+  }
+  return template.container.split("{{{ww:cards}}}").join(inner);
+}
+function renderProductCardPager(template, pagination, href) {
+  const pager = template && template.pager;
+  const page = Math.floor(Number(pagination && pagination.page)), pages = Math.floor(Number(pagination && pagination.pages));
+  if (!pager || pager.version !== 1 || typeof pager.html !== "string" || !pager.html.includes("{{{ww:pages}}}") || typeof pager.page !== "string"
+    || typeof pager.current !== "string" || typeof href !== "function" || !(pages > 1) || !(page >= 1) || page > pages) return "";
+  const escape = (value) => String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[character]);
+  const fill = (text, number) => text.replace(/\{\{ww:(href|number)\}\}/g, (_, name) => escape(name === "number" ? number : href(number)));
+  const items = [];
+  let last = 0;
+  for (let number = 1; number <= pages; number++) {
+    if (pages > 7 && number !== 1 && number !== pages && Math.abs(number - page) > 2) continue;
+    if (number - last > 1 && typeof pager.ellipsis === "string") items.push(pager.ellipsis);
+    items.push(fill(number === page ? pager.current : pager.page, number));
+    last = number;
+  }
+  const control = (forms, number) => {
+    if (!forms) return "";
+    const live = number >= 1 && number <= pages;
+    const form = live ? forms.live : forms.disabled;
+    return typeof form === "string" ? (live ? fill(form, number) : form) : "";
+  };
+  const parts = { previous: control(pager.previous, page - 1), next: control(pager.next, page + 1), pages: items.join(typeof pager.gap === "string" ? pager.gap : "") };
+  return pager.html.replace(/\{\{\{ww:(previous|next|pages)\}\}\}/g, (_, name) => parts[name]);
+}
 
 function productImageLayout(catalog, display) {
   if (['single','carousel','lux'].includes(catalog?.imageLayout)) return catalog.imageLayout;
@@ -782,7 +1149,10 @@ async function serveCommerceSnapshot(request, env) {
   const params = new URL(request.url).searchParams;
   const headers = { "cache-control": "no-store", "x-ww-store": "3" };
   const snapshot = params.get("view") === "detail" ? await readStoreDetail(env, params.get("path") || "/") : await readCommerceSnapshot(env);
-  return Response.json(projectShopCatalog(snapshot || { enabled: false, siteId: CONTACT_SITE_ID }, params), { headers });
+  const catalog = projectShopCatalog(snapshot || { enabled: false, siteId: CONTACT_SITE_ID }, params);
+  // A list the source shop's cards draw (data-ww-product-cards) is filled by the store's script from this template.
+  if (params.get("view") === "list" && STORE_SHOP_THEME?.cards) catalog.cardTemplate = STORE_SHOP_THEME.cards;
+  return Response.json(catalog, { headers });
 }
 
 function escapeStoreHtml(value) {
@@ -790,15 +1160,20 @@ function escapeStoreHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (character) => entities[character.charCodeAt(0)]);
 }
 
-async function commercePage(title, main, env, url, description = "") {
+async function commercePage(title, main, env, url, description = "", pageTitle = "", options = {}) {
+  const ownTitle = String(pageTitle || title || "").trim();
+  const siteName = String(STORE_SITE_NAME || "").trim();
+  const fullTitle = !siteName || ownTitle.toLowerCase().includes(siteName.toLowerCase()) ? ownTitle || siteName : ownTitle + " | " + siteName;
   if (env.ASSETS) {
     const homepage = await env.ASSETS.fetch(new Request(new URL("/", url.origin)));
     if (homepage.ok && String(homepage.headers.get("content-type") || "").includes("text/html")) {
       if (typeof HTMLRewriter === "undefined") {
         const html = (await homepage.text())
           .replace(/\s+aria-current="page"/g, "")
-          .replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, "<title>" + escapeStoreHtml(title + " | " + STORE_SITE_NAME) + "</title>")
-          .replace(/<main\b([^>]*)>[\s\S]*?<\/main>/i, (_, attributes) => "<main" + attributes + ">" + main + "</main>");
+          .replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, "<title>" + escapeStoreHtml(fullTitle) + "</title>")
+          .replace(/<meta\s+name="description"\s+content="[^"]*"\s*\/?>/i, '<meta name="description" content="' + escapeStoreHtml(String(description || title).slice(0, 300)) + '">')
+          .replace(/<main\b([^>]*)>[\s\S]*?<\/main>/i, (_, attributes) => "<main" + attributes + ">" + main + "</main>")
+          .replace(/(<body\b[^>]*\bclass=")([^"]*)"/i, (_, start, names) => start + names.split(/\s+/).filter((name) => name && name !== "ww-header-overlay").join(" ") + '"');
         return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "Link": "<" + url.origin + url.pathname + ">; rel=canonical" } });
       }
       // Store pages are run by the shared behaviour runtime, whether or not the site's other pages load it.
@@ -806,12 +1181,18 @@ async function commercePage(title, main, env, url, description = "") {
       const composed = new HTMLRewriter()
         // The shell is the home page's, and this is not the home page.
         .on('[aria-current="page"]', { element(element) { element.removeAttribute("aria-current"); } })
-        .on("title", { element(element) { element.setInnerContent(String(title) + " | " + STORE_SITE_NAME); } })
+        .on("title", { element(element) { element.setInnerContent(fullTitle); } })
         .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", url.origin + url.pathname); } })
         .on('meta[name="description"]', { element(element) { element.setAttribute("content", String(description || title).slice(0, 300)); } })
-        .on("main", { element(element) { element.setAttribute("class", (element.getAttribute("class") || "") + " ww-commerce-main"); element.setInnerContent(main, { html: true }); } })
+        .on("main", { element(element) { element.setAttribute("class", (element.getAttribute("class") || "") + (options.themed ? " ww-commerce-themed" : " ww-commerce-main")); element.setInnerContent(main, { html: true }); } })
         .on('script[src="/app.js"]', { element() { sharedRuntime = true; } })
-        .on("body", { element(element) { element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); }); } })
+        .on("body", { element(element) {
+          const pageClasses = (options.bodyClasses || []).filter((name) => /^template-[\w-]+$/.test(name));
+          const homeClasses = String(element.getAttribute("class") || "").split(/\s+/).filter((name) => name && name !== "ww-header-overlay");
+          const classes = pageClasses.length ? homeClasses.filter((name) => !/^template-/.test(name)).concat(pageClasses) : homeClasses;
+          if (classes.join(" ") !== String(element.getAttribute("class") || "").trim()) element.setAttribute("class", classes.join(" "));
+          element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); });
+        } })
         .transform(homepage);
       return finishCommercePage(composed, env, url);
     }
@@ -862,10 +1243,11 @@ async function serveCommerceProductPage(request, env, pathname) {
   const snapshot = await readStoreDetail(env, pathname);
   const route = pathname.endsWith("/") ? pathname : pathname + "/";
   const products = [...(snapshot?.sourceProducts || []), ...(snapshot?.products || [])];
-  const product = products.find((entry) => {
+  const onPage = (entry) => {
     const sourcePath = String(entry.sourcePath || "");
     return sourcePath && (sourcePath.endsWith("/") ? sourcePath : sourcePath + "/") === route;
-  });
+  };
+  const product = products.find(onPage);
   if (!product) return new Response("Product not found", { status: 404 });
   // A gallery's products have no pages; a catalog's pages describe the product and sell nothing.
   const mode = storeMode(snapshot.storeDisplay);
@@ -879,8 +1261,13 @@ async function serveCommerceProductPage(request, env, pathname) {
     : product.orderingClosed ? "Pre-orders closed" : available
     ? product.catalog?.saleType === "preorder" ? "Available to pre-order" : "Available"
     : "Not currently available to order";
+  // Its customers' reviews (shop-reviews.js on the platform writes them; the list row names their file), drawn into the
+  // page and given to search engines with the stars they add up to.
+  const reviews = await readProductReviews(env, product);
   const schema = { "@context": "https://schema.org", "@type": "Product", name: product.title,
     description: product.description || "", sku: product.sku || undefined,
+    ...(product.catalog?.brand ? { brand: { "@type": "Brand", name: product.catalog.brand } } : {}),
+    ...productReviewSchema(reviews),
     image: [...new Set([product.imageIsDefault ? "" : image, ...(product.catalog?.images || []).map((entry) => entry.url)].filter(Boolean))].map((value) => new URL(value, request.url).href),
     ...(product.priceAmount != null ? { offers: { "@type": "Offer", url: new URL(request.url).origin + route,
       priceCurrency: product.currency,
@@ -891,20 +1278,112 @@ async function serveCommerceProductPage(request, env, pathname) {
   const publicationMarkup = specs.length ? '<dl class="ww-store-publication ww-store-specs">' + specs.map((spec) => '<dt>' + escapeStoreHtml(spec.label) + '</dt><dd>' + escapeStoreHtml(spec.value) + '</dd>').join("") + '</dl>'
     : product.catalog?.showPublicationFacts ? '<dl class="ww-store-publication">' + Object.entries(publicationLabels)
     .filter(([key]) => product.catalog.publication?.[key]).map(([key, label]) => '<dt>' + label + '</dt><dd>' + escapeStoreHtml(product.catalog.publication[key]) + '</dd>').join("") + '</dl>' : "";
-  const main = '<article class="ww-product-detail" data-ww-behavior="commerce-store" data-ww-product-detail data-ww-detail-layout="' + productImageLayout(product.catalog, snapshot.storeDisplay) + '"'
+  // The source shop's own product page, filled from the store, unless the owner chose a photo layout of the store's.
+  const layoutChosen = ["single", "carousel", "lux"].includes(product.catalog?.imageLayout) || ["single", "carousel", "lux"].includes(snapshot.storeDisplay?.productPhotos)
+    || (product.catalog?.imageLayout === undefined && ["single", "luxury"].includes(product.catalog?.imagePresentation));
+  const themed = STORE_PRODUCT_TEMPLATE && !layoutChosen ? renderProductTemplate(STORE_PRODUCT_TEMPLATE, products.filter(onPage),
+    { mode, origin: new URL(request.url).origin, path: route }) : "";
+  // What the store says beyond the theme's section (where the shop is, the product's facts, reviews, policies) follows
+  // it, in one box at the store's width.
+  const after = themed ? (inStore && snapshot.inStoreNote ? '<p class="ww-store-status" role="status">' + status + '</p>' : "")
+    + publicationMarkup + storeReviewsMarkup(reviews) + storePolicyLinks(snapshot, "product") : "";
+  // A copied product's description as its owner formatted it, while its words are the ones it came with.
+  const formattedDescription = themed ? "" : productDescriptionHtml(product.description, product.catalog?.richDescription);
+  const main = themed ? themed + (after ? '<div class="ww-store-after">' + after + '</div>' : "")
+    + '<script type="application/ld+json">' + JSON.stringify(schema).replace(/</g, "\\u003c") + '</script>'
+    : '<article class="ww-product-detail" data-ww-behavior="commerce-store" data-ww-product-detail data-ww-detail-layout="' + productImageLayout(product.catalog, snapshot.storeDisplay) + '"'
     + (mode === "shop" ? "" : ' data-ww-store-mode="' + mode + '"') + '>'
-    + '<h1>' + escapeStoreHtml(product.title) + '</h1>' + storePriceMarkup([product]) + '<p class="ww-store-description">' + escapeStoreHtml(product.description) + '</p>'
+    + '<h1>' + escapeStoreHtml(product.title) + '</h1>' + storePriceMarkup([product]) + (formattedDescription
+      ? '<div class="ww-store-description ww-store-description--formatted">' + formattedDescription + '</div>'
+      : '<p class="ww-store-description">' + escapeStoreHtml(product.description) + '</p>')
     + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + escapeStoreHtml(product.title) + '" loading="eager">' : '')
     + (product.catalog?.releaseAt ? '<p>Expected release: <time datetime="' + escapeStoreHtml(product.catalog.releaseAt) + '">' + escapeStoreHtml(product.catalog.releaseDate || product.catalog.releaseAt.slice(0, 10)) + '</time></p>' : '')
-    + publicationMarkup + (mode === "shop" ? '<p role="status" aria-live="polite">' + status + '</p>' : '') + '</article>' + storePolicyLinks(snapshot)
+    + publicationMarkup + (mode === "shop" ? '<p role="status" aria-live="polite">' + status + '</p>' : '') + '</article>' + storeReviewsMarkup(reviews) + storePolicyLinks(snapshot, "product")
     + '<script type="application/ld+json">' + JSON.stringify(schema).replace(/</g, "\\u003c") + '</script>';
-  return commercePage(product.title || "Product", main, env, new URL(request.url), product.description);
+  // The owner's search title and description (catalog.search) when set, from whichever option of the product has them
+  // (Shopify's export gives them on its first row only); the website's name follows a search title that does not already
+  // say it, as Shopify's themes do, so a moved shop's search results read the same.
+  const search = products.find((entry) => onPage(entry) && entry.catalog?.search)?.catalog.search || {};
+  const siteName = String(STORE_SITE_NAME || "");
+  const searchTitle = !search.title ? "" : !siteName || search.title.toLowerCase().includes(siteName.toLowerCase()) ? search.title : search.title + " | " + siteName;
+  return commercePage(product.title || "Product", main, env, new URL(request.url), search.description || product.description, searchTitle,
+    themed ? { themed: true, bodyClasses: STORE_PRODUCT_TEMPLATE.bodyClasses || [] } : {});
 }
 
-// Links to the shop's written policies, drawn into the page itself so they show before any script runs.
-function storePolicyLinks(snapshot) {
+// A product's reviews file, reviews/<file>.json beside the shop's other files: its newest published reviews (up to 100),
+// their count and average. Read only for a product whose list row says it has reviews.
+async function readProductReviews(env, product) {
+  const rating = product && product.rating;
+  if (!rating || !(Number(rating.count) > 0) || !/^[0-9a-f]{1,16}$/.test(String(rating.file || "")) || !env.MEDIA) return null;
+  const object = await env.MEDIA.get(STORE_FILES_PREFIX + "reviews/" + rating.file + ".json").catch(() => null);
+  if (!object) return null;
+  try {
+    const file = JSON.parse(await object.text());
+    return Array.isArray(file.reviews) && file.reviews.length ? file : null;
+  } catch { return null; }
+}
+
+function reviewDay(value) {
+  try { return new Intl.DateTimeFormat("en-US", { dateStyle: "long", timeZone: "UTC" }).format(new Date(value)); }
+  catch { return String(value || "").slice(0, 10); }
+}
+
+const REVIEWS_SHOWN_FIRST = 10;
+// The reviews section after the product: the average, then each review newest first (the first ten open, the rest a
+// click away). A reviewer rewarded for the review is said to be, and the shop's reply follows the review it answers.
+function storeReviewsMarkup(file) {
+  if (!file) return "";
+  const count = Number(file.count) || file.reviews.length;
+  const average = Math.round((Number(file.average) || 0) * 10) / 10;
+  const paragraphs = (text) => escapeStoreHtml(text).split(/\n{2,}/).map((part) => '<p>' + part.replace(/\n/g, "<br>") + '</p>').join("");
+  const one = (review) => {
+    const name = String(review.name || "").trim() || "A customer";
+    const photos = (Array.isArray(review.photos) ? review.photos : []).filter((url) => typeof url === "string" && url.startsWith("/") && !url.startsWith("//"));
+    // A thumbnail is asked for small (the image route sizes it); the link opens the whole photo.
+    const thumb = (url) => url.startsWith("/images/") ? url + (url.includes("?") ? "&" : "?") + "w=192" : url;
+    return '<li class="ww-store-review"><p>' + storeStars(review.rating, "Rated " + review.rating + " out of 5") + '</p>'
+      + (review.title ? '<h3>' + escapeStoreHtml(review.title) + '</h3>' : '')
+      + (review.body ? paragraphs(review.body) : '')
+      + (photos.length ? '<div class="ww-store-review-photos">' + photos.map((url, index) => '<a href="' + escapeStoreHtml(url) + '"><img src="' + escapeStoreHtml(thumb(url))
+        + '" alt="Photo ' + (index + 1) + ' from ' + escapeStoreHtml(name) + '’s review" loading="lazy" width="96" height="96"></a>').join("") + '</div>' : '')
+      + '<p class="ww-store-review-meta">' + escapeStoreHtml(name) + (review.location ? ', ' + escapeStoreHtml(review.location) : '')
+      + ' · <time datetime="' + escapeStoreHtml(String(review.date || "").slice(0, 10)) + '">' + escapeStoreHtml(reviewDay(review.date)) + '</time>'
+      + (review.verified ? ' · Verified buyer' : '') + '</p>'
+      + (review.rewarded ? '<p class="ww-store-review-badge">Received a reward for this review</p>' : '')
+      + (review.reply ? '<div class="ww-store-review-reply"><p><strong>Reply from ' + escapeStoreHtml(STORE_SITE_NAME || "the shop") + '</strong></p>' + paragraphs(review.reply) + '</div>' : '')
+      + '</li>';
+  };
+  const first = file.reviews.slice(0, REVIEWS_SHOWN_FIRST), rest = file.reviews.slice(REVIEWS_SHOWN_FIRST);
+  return '<section class="ww-store-reviews" id="reviews" aria-labelledby="ww-store-reviews-title"><h2 id="ww-store-reviews-title">Customer reviews</h2>'
+    + '<p class="ww-store-review-summary">' + storeStars(average) + '<span>' + average.toFixed(1) + ' out of 5</span><span>' + count + (count === 1 ? ' review' : ' reviews') + '</span></p>'
+    + '<ol class="ww-store-review-list">' + first.map(one).join("") + '</ol>'
+    + (rest.length ? '<details class="ww-store-reviews-more"><summary>Show ' + rest.length + ' more ' + (rest.length === 1 ? 'review' : 'reviews') + '</summary><ol class="ww-store-review-list">' + rest.map(one).join("") + '</ol></details>' : '')
+    + (count > file.reviews.length ? '<p>Showing the ' + file.reviews.length + ' most recent of ' + count + ' reviews.</p>' : '')
+    + '</section>';
+}
+
+// The reviews in the Product's structured data: the average of all of them, and the newest ten that name their writer
+// (Google asks for a reviewer's real name).
+function productReviewSchema(file) {
+  if (!file) return {};
+  const count = Number(file.count) || file.reviews.length;
+  const ratingOf = (value) => ({ "@type": "Rating", ratingValue: value, bestRating: 5, worstRating: 1 });
+  const named = file.reviews.filter((review) => String(review.name || "").trim()).slice(0, REVIEWS_SHOWN_FIRST);
+  return {
+    aggregateRating: { "@type": "AggregateRating", ratingValue: Math.round((Number(file.average) || 0) * 10) / 10, reviewCount: count, bestRating: 5, worstRating: 1 },
+    ...(named.length ? { review: named.map((review) => ({ "@type": "Review", author: { "@type": "Person", name: String(review.name).trim().slice(0, 100) },
+      datePublished: String(review.date || "").slice(0, 10), reviewRating: ratingOf(review.rating),
+      ...(review.title ? { name: review.title } : {}), ...(review.body ? { reviewBody: review.body } : {}) })) } : {})
+  };
+}
+
+
+// Links to the shop's written policies, drawn into the page itself so they show before any script runs. A copied shop
+// whose own product pages or cart page had none there (STORE_SHOP_THEME.policyLinks) has none there now: her menu
+// still leads to them (TheGlamourAddict, Nov 24 2026).
+function storePolicyLinks(snapshot, place = "") {
   const pages = Array.isArray(snapshot?.storePolicies) ? snapshot.storePolicies : [];
-  if (!pages.length) return "";
+  if (!pages.length || (place && STORE_SHOP_THEME?.policyLinks?.[place] === false)) return "";
   return '<nav class="ww-store-policies" aria-label="Store policies">' + pages.map((page) => '<a href="' + escapeStoreHtml(page.path) + '">' + escapeStoreHtml(page.title) + '</a>').join(" ") + '</nav>';
 }
 
@@ -930,8 +1409,20 @@ async function serveCommerceCart(env, url) {
   const snapshot = await readCommerceSnapshot(env);
   if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
   if (storeMode(snapshot.storeDisplay) !== "shop") return notFoundPage(env, url, new Response("Page not found", { status: 404 }));
-  const main = '<section class="ww-cart" data-ww-behavior="commerce-store" data-ww-cart>'
-    + '<h1>Your cart</h1><p role="status" aria-live="polite">Loading cart…</p></section>' + storePolicyLinks(snapshot);
+  // With signups on, the cart carries the name the shop's news comes from, and the store script draws the box above Check out.
+  const signups = await siteSignupsSettings(env);
+  const newsFrom = signups && signups.enabled === true ? String(signups.name || CONTACT_SITE_LABEL || "").slice(0, 80) : null;
+  const news = newsFrom === null ? '' : ' data-ww-news-from="' + escapeStoreHtml(newsFrom) + '"';
+  // The source shop's own cart page (her "Shopping Cart" with its empty state), the store's cart where its lines were.
+  const page = STORE_SHOP_THEME?.cartPage;
+  if (page?.version === 1 && typeof page.html === "string" && page.html.includes("{{{ww:lines}}}")) {
+    const lines = '<div class="ww-cart" data-ww-behavior="commerce-store" data-ww-cart data-ww-cart-page' + news + '>'
+      + '<p role="status" aria-live="polite">Loading cart…</p></div>';
+    return commercePage(page.title || "Your cart", page.html.split("{{{ww:lines}}}").join(lines) + storePolicyLinks(snapshot, "cart"), env, url, "", page.pageTitle || "",
+      { themed: true, bodyClasses: page.bodyClasses || [] });
+  }
+  const main = '<section class="ww-cart" data-ww-behavior="commerce-store" data-ww-cart' + news + '>'
+    + '<h1>Your cart</h1><p role="status" aria-live="polite">Loading cart…</p></section>' + storePolicyLinks(snapshot, "cart");
   return commercePage("Your cart", main, env, url);
 }
 
@@ -939,6 +1430,15 @@ async function serveCommerceShop(env, url) {
   const snapshot = await readCommerceSnapshot(env);
   if (!snapshot?.enabled) return new Response("Store not found", { status: 404 });
   const params = new URLSearchParams(url.search); params.set("view", "list");
+  // The source shop's own cards (product-card-runtime.mjs), unless the owner chose a card of the store's: her list and
+  // her columns, with the store's search and sort only where her lists had their own (a copied page says so itself),
+  // and as many products a page as her pages showed (TheGlamourAddict's 18, Nov 24 2026), so her page links match.
+  const display = snapshot.storeDisplay || {};
+  const cardStyle = storeCardLayout(display).cards;
+  const mode = storeMode(display);
+  const theme = STORE_SHOP_THEME?.cards && !cardStyle && mode !== "gallery" ? STORE_SHOP_THEME.cards : null;
+  const themePageSize = Math.floor(Number(theme?.pageSize)) > 0 ? Math.min(Math.floor(Number(theme.pageSize)), 48) : 0;
+  if (themePageSize && !params.has("pageSize")) params.set("pageSize", String(themePageSize));
   const page = projectShopCatalog(snapshot, params);
   // One card per product; its options (sizes, colours) share the card and its price range.
   const groups = new Map();
@@ -961,13 +1461,10 @@ async function serveCommerceShop(env, url) {
   })?.label || "" : "";
   const filterNote = filtered ? '<p class="ww-store-filter">' + (filterLabel ? 'Showing ' + escapeStoreHtml(filterLabel) + '. ' : 'Showing a filtered selection. ')
     + '<a href="/shop/">' + escapeStoreHtml(settings.allLabel) + '</a></p>' : "";
-  const display = snapshot.storeDisplay || {};
   const ratio = STORE_PHOTO_RATIOS[display.photoShape];
-  const cardStyle = storeCardLayout(display).cards;
   const columns = [2, 3, 4, 5, 6].includes(display.columns) ? display.columns : 0;
   const style = (columns ? '--ww-store-columns:' + columns + ';--ww-store-columns-md:' + Math.min(columns, 3) + ';' : "")
     + (ratio ? '--ww-store-ratio:' + ratio + ';' : "") + '--ww-store-fit:' + (display.photoFit === "fill" ? "cover" : "contain");
-  const mode = storeMode(display);
   const attributes = { "data-ww-store-display": "", "data-ww-store-fit": "", ...(display.photoShape === "natural" ? { "data-ww-store-natural": "" } : {}),
     // Gallery or catalog, said where the store's stylesheet, its script and the platform's runtime check read it.
     ...(mode === "shop" ? {} : { "data-ww-store-mode": mode }),
@@ -976,10 +1473,17 @@ async function serveCommerceShop(env, url) {
     // The owner's filter bar layout and look, read by the store's stylesheet before the bar is drawn.
     ...(["row", "side", "menu"].includes(display.filterLayout) ? { "data-ww-store-filter-layout": display.filterLayout } : {}),
     ...(display.filterLook === "quiet" ? { "data-ww-store-filter-look": "quiet" } : {}), style };
-  const look = Object.entries(attributes).map(([name, value]) => ' ' + name + (value === "" ? "" : '="' + value + '"')).join("");
+  if (theme) attributes["data-ww-product-cards"] = "";
+  if (themePageSize) attributes["data-ww-product-page-size"] = String(themePageSize);
+  const look = (theme?.controls ? " data-ww-product-controls" : "") + Object.entries(attributes).map(([name, value]) => ' ' + name + (value === "" ? "" : '="' + value + '"')).join("");
   const category = url.searchParams.get("category") || "*";
   const cutoff = url.searchParams.get("cutoffDate") || "";
-  const products = filterNote + (cards ? '<div class="ww-store-grid">' + cards + '</div>' + pagination
+  const themed = theme && groups.size ? renderProductCardList(theme, [...groups.values()], { mode }) : "";
+  // Her own page links where her theme kept them (renderProductCardPager), the store's where it kept none.
+  const themedPager = themed ? renderProductCardPager(theme, page.pagination, (number) => {
+    const next = new URLSearchParams(url.search); next.delete("view"); next.set("page", String(number)); return url.pathname + "?" + next.toString();
+  }) : "";
+  const products = filterNote + (themed ? themed + (themedPager || pagination) : cards ? '<div class="ww-store-grid">' + cards + '</div>' + pagination
     : '<p class="ww-store-empty">Products will appear here when they are available.</p>');
   const designed = await designedShopPage(env, url, products, { ...attributes, "data-ww-product-category": category, ...(cutoff ? { "data-ww-product-cutoff": cutoff } : {}) });
   if (designed) return designed;
@@ -989,10 +1493,11 @@ async function serveCommerceShop(env, url) {
   return commercePage(settings.label, main, env, url);
 }
 
-// The store page a new website was written with keeps its design: the products go where the page marks them.
+// The store page a new website was written with keeps its design: the products go where the page marks them. A
+// migration's copied all-products page (SHOP_PAGE_DESIGNED names it) is worn the same way, at the store's address.
 async function designedShopPage(env, url, products, attributes) {
   if (!SHOP_PAGE_DESIGNED || !env.ASSETS || typeof HTMLRewriter === "undefined") return null;
-  const asset = await env.ASSETS.fetch(new Request(new URL("/shop/", url.origin)));
+  const asset = await env.ASSETS.fetch(new Request(new URL(SHOP_PAGE_DESIGNED === true ? "/shop/" : SHOP_PAGE_DESIGNED, url.origin)));
   if (!asset.ok || !String(asset.headers.get("content-type") || "").includes("text/html")) return null;
   const page = await asset.text();
   if (!/\bdata-ww-product-list\b/.test(page)) return null;
@@ -1006,6 +1511,7 @@ async function designedShopPage(env, url, products, attributes) {
       for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
       element.setInnerContent(products, { html: true });
     } })
+    .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", url.origin + url.pathname); } })
     .on('script[src="/app.js"]', { element() { sharedRuntime = true; } })
     .on("body", { element(element) { element.onEndTag((end) => { if (!sharedRuntime) end.before('<script src="/app.js" defer></script>', { html: true }); }); } })
     .transform(new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } }));
@@ -1021,6 +1527,25 @@ async function notFoundPage(env, url, missing) {
 // A product with no picture yet: the same "No image" panel the store's own script draws.
 function storeBlankPicture() {
   return '<div class="ww-store-image-placeholder" aria-hidden="true">' + STORE_NO_IMAGE + '</div>';
+}
+
+// Five stars to the nearest half: filled and empty stars are the characters themselves, so a rating reads right with no
+// stylesheet at all; only a half star is drawn by the shop stylesheet (.ww-star-half). Said in words beside it, or by
+// its own label where nothing beside it does.
+function storeStars(value, label) {
+  const halves = Math.min(10, Math.max(0, Math.round(Number(value) * 2)));
+  const whole = Math.floor(halves / 2), part = halves % 2;
+  return '<span class="ww-stars"' + (label ? ' role="img" aria-label="' + escapeStoreHtml(label) + '"' : ' aria-hidden="true"') + '>'
+    + "★".repeat(whole) + (part ? '<span class="ww-star-half">★</span>' : '') + "☆".repeat(5 - whole - part) + '</span>';
+}
+
+// A product's stars on its card: its published reviews' average and count (rating, from the shop's list).
+function storeRatingMarkup(product) {
+  const rating = product && product.rating;
+  if (!rating || !(Number(rating.count) > 0)) return "";
+  const average = Math.round(Number(rating.average) * 10) / 10, count = Number(rating.count);
+  return '<p class="ww-store-rating">' + storeStars(average) + '<span><span class="ww-store-visually-hidden">Rated </span>' + average.toFixed(1)
+    + '<span class="ww-store-visually-hidden"> out of 5</span> (' + count + (count === 1 ? ' review' : ' reviews') + ')</span></p>';
 }
 
 // Prices are stored in minor units; the currency says how many digits that is.
@@ -1081,7 +1606,7 @@ function storeCardMarkup(rows, display, timeZone) {
   return '<article class="ww-store-card">'
     + '<a class="ww-store-image-link" href="' + href + '" tabindex="-1" aria-hidden="true">'
     + (image ? '<img class="ww-store-image" src="' + escapeStoreHtml(image) + '" alt="' + title + '" loading="lazy">' : storeBlankPicture())
-    + '</a><h2 class="ww-store-title"><a href="' + href + '">' + title + '</a></h2>' + dateLine + detailLines + (!cards || parts.includes("price") ? storePriceMarkup(rows) : '')
+    + '</a><h2 class="ww-store-title"><a href="' + href + '">' + title + '</a></h2>' + storeRatingMarkup(product) + dateLine + detailLines + (!cards || parts.includes("price") ? storePriceMarkup(rows) : '')
     + (parts.includes("summary") && product.summary ? '<p class="ww-store-summary">' + escapeStoreHtml(product.summary) + '</p>' : '')
     + (buyable ? (owned ? '' : '<a class="ww-store-link" href="' + href + '">View details</a>') : '<p class="ww-store-status">' + (closed && parts.includes("dates") ? 'Pre-orders closed.' : 'Coming soon') + '</p>')
     + '</article>';
@@ -1134,7 +1659,12 @@ async function handleStoreCheckout(request, env, url) {
       shippingQuoteId: parsed.body.shippingQuoteId,
       shippingRateId: parsed.body.shippingRateId,
       shippingSession: shippingPlanSession(request),
-      couponCode: typeof parsed.body.couponCode === "string" ? parsed.body.couponCode.slice(0, 40) : undefined
+      couponCode: typeof parsed.body.couponCode === "string" ? parsed.body.couponCode.slice(0, 40) : undefined,
+      // The shopper ticked the cart's news box; anything else is no answer at all.
+      newsConsent: parsed.body.newsConsent === true ? true : undefined,
+      // This website can bring a cart back from a reminder's link (/api/cart-saved and the cart page that reads it), so
+      // the platform may plan one. A website not yet upgraded says nothing, and none is planned for it.
+      savedCart: true
     })
   });
   return new Response(response.body, {
@@ -1161,6 +1691,54 @@ async function handleStoreCheckoutCoupon(request, env) {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json", "user-agent": "WheelerWebsites-Generated-Site/1.0" },
     body: JSON.stringify({ siteId: CONTACT_SITE_ID, code: String(parsed.body.code || "").slice(0, 40), items: parsed.body.items })
+  });
+  return new Response(response.body, {
+    status: response.status,
+    headers: { "content-type": response.headers.get("content-type") || "application/json; charset=utf-8", "cache-control": "no-store" }
+  });
+}
+
+// What was paid, for the website's tracking tags: asked of the platform by the payment session in the page's own
+// address after checkout. Nothing about the shopper comes back, only the order's number, amounts and items.
+async function handleStoreOrderPaid(request, env) {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  const parsed = await contactBody(request);
+  const sessionId = String(parsed.body && parsed.body.sessionId || "");
+  if (parsed.rawBytes > 1024 || !/^cs_(?:test|live)_[A-Za-z0-9]{8,200}$/.test(sessionId)) return Response.json({ paid: false }, { status: 400 });
+  if (!env.CONTACT_ACTOR_RATE || !env.CONTACT_SITE_RATE) return Response.json({ paid: false }, { status: 503 });
+  const limits = await Promise.all([
+    env.CONTACT_ACTOR_RATE.limit({ key: "order-paid-ip:" + (request.headers.get("cf-connecting-ip") || "unknown") }),
+    env.CONTACT_SITE_RATE.limit({ key: "order-paid-site:" + CONTACT_SITE_ID })
+  ]);
+  if (limits.some((limit) => !limit.success)) return Response.json({ paid: false }, { status: 429 });
+  const response = await fetch(COMMERCE_PLATFORM_ORIGIN + "/api/site-order-paid", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", "user-agent": "WheelerWebsites-Generated-Site/1.0" },
+    body: JSON.stringify({ siteId: CONTACT_SITE_ID, sessionId })
+  });
+  return new Response(response.body, {
+    status: response.status,
+    headers: { "content-type": response.headers.get("content-type") || "application/json; charset=utf-8", "cache-control": "no-store" }
+  });
+}
+
+// The link in a cart reminder (/cart/?saved=<token>): the cart as the shopper left it, asked of the platform by the
+// link's token, or, with stop, no more reminders from this shop.
+async function handleStoreCartSaved(request, env) {
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  const parsed = await contactBody(request);
+  const token = String(parsed.body && parsed.body.token || "");
+  if (parsed.rawBytes > 2048 || !/^[0-9a-f]{64}$/.test(token)) return Response.json({ error: "This link can't be used." }, { status: 400 });
+  if (!env.CONTACT_ACTOR_RATE || !env.CONTACT_SITE_RATE) return Response.json({ error: "Your cart could not be brought back just now." }, { status: 503 });
+  const limits = await Promise.all([
+    env.CONTACT_ACTOR_RATE.limit({ key: "cart-saved-ip:" + (request.headers.get("cf-connecting-ip") || "unknown") }),
+    env.CONTACT_SITE_RATE.limit({ key: "cart-saved-site:" + CONTACT_SITE_ID })
+  ]);
+  if (limits.some((limit) => !limit.success)) return Response.json({ error: "Please wait a moment and try again." }, { status: 429 });
+  const response = await fetch(COMMERCE_PLATFORM_ORIGIN + "/api/site-cart-saved", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", "user-agent": "WheelerWebsites-Generated-Site/1.0" },
+    body: JSON.stringify({ siteId: CONTACT_SITE_ID, token, stop: parsed.body.stop === true })
   });
   return new Response(response.body, {
     status: response.status,
@@ -1212,9 +1790,15 @@ async function handleStoreCheckoutShipping(request, env, url) {
   });
 }
 
+// The page a signup was made on, without its query, except the tag a link carries to say where it was followed from: the
+// shop's in-store QR code opens /?from=counter, so a signup made at the counter is recorded as one.
 function consentSource(request) {
   const referer = request.headers.get("referer") || "managed signup form";
-  try { const url = new URL(referer); return url.origin + url.pathname; } catch { return "managed signup form"; }
+  try {
+    const url = new URL(referer);
+    const from = url.searchParams.get("from") || "";
+    return url.origin + url.pathname + (/^[A-Za-z0-9_-]{1,32}$/.test(from) ? "?from=" + from : "");
+  } catch { return "managed signup form"; }
 }
 
 async function handleSubscriberCapture(request, env) {
@@ -1237,7 +1821,40 @@ async function handleSubscriberCapture(request, env) {
     headers: { "content-type": "application/json", accept: "application/json", "user-agent": "WheelerWebsites-Generated-Site/1.0" },
     body: JSON.stringify({
       siteId: CONTACT_SITE_ID, captureToken, email, consent,
+      // The name a sign-up asked for beside the address (a copied newsletter bar's "First name"), kept with it.
+      ...(String(parsed.body?.name || "").trim() ? { name: String(parsed.body.name).trim().slice(0, 200) } : {}),
       consentSource: consentSource(request)
+    })
+  });
+  return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+}
+
+// A sign-up form (docs/customer-accounts/sign-up-forms.md): the news signup's token, limits, honeypot and bot check,
+// with the form it was made on and the name and phone a form may ask for. The platform keeps only what that form asks,
+// and answers the same whoever signs up.
+async function handleSignupJoin(request, env) {
+  const captureToken = String(env.SUBSCRIBER_CAPTURE_TOKEN || SUBSCRIBER_CAPTURE_TOKEN).trim();
+  if ((!SUBSCRIBERS_CONFIGURED && !env.SUBSCRIBER_CAPTURE_TOKEN) || !captureToken || !env.CONTACT_ACTOR_RATE || !env.CONTACT_SITE_RATE) return new Response("Not found", { status: 404 });
+  if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  const parsed = await contactBody(request);
+  if (String(parsed.body?.website || "").trim()) return Response.json({ ok: true, message: "Check your email to confirm your address." }, { status: 202 });
+  const limits = await Promise.all([
+    env.CONTACT_ACTOR_RATE.limit({ key: "join-ip:" + (request.headers.get("cf-connecting-ip") || "unknown") }),
+    env.CONTACT_SITE_RATE.limit({ key: "join-site:" + CONTACT_SITE_ID })
+  ]);
+  if (limits.some((limit) => !limit.success)) return Response.json({ error: "Please wait a moment and try again." }, { status: 429 });
+  const formCheck = await managedFormCheck(parsed.body, env, request, "join");
+  if (formCheck) return Response.json({ error: formCheck.message }, { status: formCheck.status });
+  const text = (value, most) => String(value || "").trim().slice(0, most);
+  const response = await fetch(SUBSCRIBER_PLATFORM_ORIGIN + "/api/signups/capture", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json", "user-agent": "WheelerWebsites-Generated-Site/1.0" },
+    body: JSON.stringify({
+      siteId: CONTACT_SITE_ID, captureToken, formId: text(parsed.body?.formId, 64).toLowerCase(),
+      email: text(parsed.body?.email, 320).toLowerCase(), name: text(parsed.body?.name, 200), phone: text(parsed.body?.phone, 60),
+      source: consentSource(request),
+      // The confirmation link may open on this website, which draws the platform's page in its own look.
+      confirmPath: "/join/confirm/"
     })
   });
   return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
@@ -1587,6 +2204,19 @@ async function siteBrandSettings(env) {
   siteBrandCache = { at: Date.now(), value };
   return value;
 }
+// Whether the website takes email signups (site-integrations/<site>/signups.json, which the platform publishes as the
+// owner turns them on or off), read at most once a minute: the cart offers its "email me news" box only then.
+let siteSignupsCache = null;
+async function siteSignupsSettings(env) {
+  if (siteSignupsCache && Date.now() - siteSignupsCache.at < 60000) return siteSignupsCache.value;
+  let value = null;
+  try {
+    const object = env.MEDIA ? await env.MEDIA.get("site-integrations/" + CONTACT_SITE_ID + "/signups.json") : null;
+    value = object ? await object.json() : null;
+  } catch { value = null; }
+  siteSignupsCache = { at: Date.now(), value };
+  return value;
+}
 function siteSharePath(brand) {
   const path = String((brand && brand.share && brand.share.mediaPath) || "").replace(/^[/]+/, "");
   return /^[A-Za-z0-9][A-Za-z0-9/_. -]{0,300}[.](?:png|jpe?g|webp|gif|avif)$/i.test(path) && path.indexOf("..") < 0 ? path : "";
@@ -1713,12 +2343,15 @@ const siteRequestHandler = {
     if (url.pathname === "/events.ics" && request.method === "GET") return serveEventSnapshot(request, env, true);
     if (url.pathname === "/api/updates" && request.method === "GET") return serveUpdateSnapshot(request, env);
     if (url.pathname === "/api/subscribe") return handleSubscriberCapture(request, env);
+    if (url.pathname === "/api/join") return handleSignupJoin(request, env);
     if (url.pathname === "/api/store") {
       return request.method === "GET" ? serveCommerceSnapshot(request, env)
         : new Response("Method not allowed", { status: 405, headers: { allow: "GET" } });
     }
     if (url.pathname === "/api/checkout") return handleStoreCheckout(request, env, url);
     if (url.pathname === "/api/checkout-coupon") return handleStoreCheckoutCoupon(request, env);
+    if (url.pathname === "/api/order-paid") return handleStoreOrderPaid(request, env);
+    if (url.pathname === "/api/cart-saved") return handleStoreCartSaved(request, env);
     if (url.pathname === "/api/shipping-rates") return handleStoreShippingRates(request, env, url);
     if (url.pathname === "/api/checkout-shipping") return handleStoreCheckoutShipping(request, env, url);
     if (url.pathname.startsWith("/api/order-history/")) return proxyOrderHistory(request, env);
@@ -1848,7 +2481,9 @@ const siteHandler = withSiteIcon(siteRequestHandler);
 export default withSiteContent(siteHandler, {
   key: "site-content/b97ce281-ffaf-4808-b4d6-9778c1d2d95e.json",
   binding: "MEDIA",
-  formCheck: signupFormCheck
+  formCheck: signupFormCheck,
+  // This Worker takes sign-up forms at /api/join, so the content layer draws them (public/signup-forms-site.js).
+  joinFormCheck: (env, language) => signupFormCheck(env, language, "join")
 });
 
 // BEGIN MANAGED SHOP COLLECTIONS
@@ -2052,7 +2687,8 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
       addCommerceRoutesToManifest, addCommerceRoutesToSitemap } = (function createShopCollectionRuntime({
   config: SHOP_COLLECTION_CONFIG, readCommerceSnapshot, escapeStoreHtml, commercePage, shopMenuGroups,
   projectShopCatalog, shopCollectionIndex, shopMenuFilter, resolveShopCollection, legacycommerceRoutes,
-  legacyaddCommerceNavigation, legacyaddCommerceRoutesToManifest, legacyaddCommerceRoutesToSitemap, storeBannerColorRules
+  legacyaddCommerceNavigation, legacyaddCommerceRoutesToManifest, legacyaddCommerceRoutesToSitemap, storeBannerColorRules,
+  shopTheme = null, renderProductCardList = null
 }) {
   // A page's menus and links count the shop's products many times over; each count is worked out once per published
   // shop. readCommerceSnapshot hands back the same object for a few seconds, so this lasts that long and no longer.
@@ -2068,9 +2704,11 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
   async function serveManagedShopCollection(request, env) {
     const url = new URL(request.url);
     const snapshot = await readCommerceSnapshot(env);
-    // The source store's search address searches the product module.
+    // The source store's search address searches the product module. With nothing asked yet, a copied search page
+    // (TheGlamourAddict's "Search our site", Nov 23 2026) is served as it was: its form asks this address again.
     if (snapshot?.enabled && ["/search", "/search/"].includes(url.pathname)) {
       const query = url.searchParams.get("q");
+      if (!query && env?.ASSETS && (await env.ASSETS.fetch(new Request(new URL("/search/", url)))).ok) return null;
       return Response.redirect(new URL("/shop/" + (query ? "?" + new URLSearchParams([["q", query]]) : ""), url), 301);
     }
     if (snapshot?.enabled && ["/collections", "/collections/", "/collections/all", "/collections/all/"].includes(url.pathname)) return Response.redirect(new URL("/shop/"+url.search,url),301);
@@ -2084,14 +2722,30 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
     }
     if (url.pathname !== match.path) return Response.redirect(new URL(match.path + url.search,url),301);
     const group = match.group;
+    // A copied collection page whose store list is this collection keeps the source's page around it (heading, words,
+    // layout); the generic page is for a collection the website has no page of its own for. TheGlamourAddict's
+    // /collections/frontpage/ and /collections/glamour-reloved/ (Nov 23 2026) were otherwise replaced by it.
+    if (group.kind === "category" && env?.ASSETS) {
+      const own = await env.ASSETS.fetch(new Request(new URL(match.path, url)));
+      if (own.ok && String(own.headers.get("content-type") || "").includes("text/html")
+        && (await own.text()).includes('data-ww-product-category="'+escapeStoreHtml(group.categoryPath)+'"')) return null;
+    }
+    // A category's page lists it in the order the site it was copied from did (a Shopify collection's own order, kept as
+    // each product's place in it, TheGlamourAddict Nov 23 2026); a category the owner made has none, so it lists by name.
     const attributes = group.kind === "foc" ? 'data-ww-product-category="*" data-ww-product-cutoff="'+escapeStoreHtml(group.cutoffDate)+'"'
-      : 'data-ww-product-category="'+escapeStoreHtml(group.categoryPath)+'"';
-    const params = new URLSearchParams(url.search);params.set("view","list");params.set("pageSize","24");
+      : 'data-ww-product-category="'+escapeStoreHtml(group.categoryPath)+'" data-ww-product-order="source"';
+    // A copied shop's own cards (product-card-runtime.mjs) draw the list here too, as on its copied collection pages:
+    // no count the source never printed, the store's search and sort only where its lists had their own, and as many
+    // products a page as its pages showed (TheGlamourAddict's theme: 18, Nov 24 2026).
+    const mode = storeMode(snapshot.storeDisplay);
+    const theme = shopTheme?.cards && renderProductCardList && !storeCardLayout(snapshot.storeDisplay).cards && mode !== "gallery" ? shopTheme.cards : null;
+    const pageSize = Math.floor(Number(theme?.pageSize)) > 0 ? Math.min(Math.floor(Number(theme.pageSize)), 48) : 0;
+    const params = new URLSearchParams(url.search);params.set("view","list");params.set("pageSize",String(pageSize || 24));
     params.set("category",group.kind === "category" ? group.categoryPath : "*");
+    if(group.kind === "category")params.set("order","source");
     if(group.kind === "foc")params.set("cutoffDate",group.cutoffDate);
     const listing = projectShopCatalog(snapshot,params);
     // A gallery's products have no pages of their own: its cards are the photo, the name and the description.
-    const mode = storeMode(snapshot.storeDisplay);
     const cards = [...listing.products || [], ...listing.sourceProducts || []].map(product => {
       const image = product.imageUrl || product.catalog?.images?.[0]?.url;
       const title = escapeStoreHtml(product.title);
@@ -2102,7 +2756,10 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
       return '<article class="ww-store-card"><a href="'+path+'">'+picture+'<h2>'+title+'</h2></a>'+(price ? '<p>'+escapeStoreHtml(price)+'</p>' : '')+'</article>';
     }).join("");
     const modeAttribute = mode === "shop" ? "" : ' data-ww-store-mode="'+mode+'"';
-    return commercePage(group.title, '<section class="ww-product-section"><h1>'+escapeStoreHtml(group.title)+'</h1><p>'+listing.pagination.total+' products</p><div data-ww-behavior="commerce-store" data-ww-product-list '+attributes+modeAttribute+' aria-live="polite"><div class="ww-store-grid">'+cards+'</div></div></section>',env,url);
+    const rows = [...listing.sourceProducts || [], ...listing.products || []];
+    const themed = theme && rows.length ? renderProductCardList(theme, rows.map(row => [row]), { mode }) : "";
+    if (themed) return commercePage(group.title, '<section class="ww-product-section"><h1>'+escapeStoreHtml(group.title)+'</h1><div data-ww-behavior="commerce-store" data-ww-product-list data-ww-product-cards'+(theme.controls ? ' data-ww-product-controls' : '')+(pageSize ? ' data-ww-product-page-size="'+pageSize+'"' : '')+' '+attributes+modeAttribute+' aria-live="polite">'+themed+'</div></section>',env,url);
+    return commercePage(group.title, '<section class="ww-product-section"><h1>'+escapeStoreHtml(group.title)+'</h1><p>'+listing.pagination.total+(listing.pagination.total === 1 ? ' product' : ' products')+'</p><div data-ww-behavior="commerce-store" data-ww-product-list '+attributes+modeAttribute+' aria-live="polite"><div class="ww-store-grid">'+cards+'</div></div></section>',env,url);
   }
 
   async function rewriteShopCollectionLinks(response, env) {
@@ -2206,6 +2863,8 @@ const { serveManagedShopCollection, commerceRoutes, addCommerceNavigation,
 })({
       config: SHOP_COLLECTION_CONFIG, readCommerceSnapshot, escapeStoreHtml, commercePage, shopMenuGroups,
       projectShopCatalog, shopCollectionIndex, shopMenuFilter, resolveShopCollection, legacycommerceRoutes,
-      legacyaddCommerceNavigation, legacyaddCommerceRoutesToManifest, legacyaddCommerceRoutesToSitemap, storeBannerColorRules
+      legacyaddCommerceNavigation, legacyaddCommerceRoutesToManifest, legacyaddCommerceRoutesToSitemap, storeBannerColorRules,
+      shopTheme: typeof STORE_SHOP_THEME === "undefined" ? null : STORE_SHOP_THEME,
+      renderProductCardList: typeof renderProductCardList === "function" ? renderProductCardList : null
     });
 // END MANAGED SHOP COLLECTIONS

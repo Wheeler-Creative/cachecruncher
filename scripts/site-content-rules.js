@@ -49,6 +49,9 @@
 //   setInnerContent(t) replace children with text ({ html: true }: with markup)
 //   replace(html)      replace the element itself with markup
 //
+// A transform may instead have text(value), given an element's whole text (a
+// script's JSON) and returning what replaces it.
+//
 // Nothing reads a parent, a sibling or an index, because HTMLRewriter streams
 // and cannot see any of them.
 
@@ -58,7 +61,8 @@ export const CONTENT_VERSION = 1;
 // 3: background images and videos.
 // 4: the words a photograph place reads aloud (a logo's alt), and the header and footer as fields of their own.
 // 5: a sentence's words with **bold**, *italic* and line breaks (FORMAT_ATTRIBUTE).
-export const CONTENT_RULES_VERSION = 5;
+// 6: the business's own listings (seo.sameAs) added to its structured data.
+export const CONTENT_RULES_VERSION = 6;
 
 export const EDIT_ATTRIBUTE = "data-ww-edit";
 export const KIND_ATTRIBUTE = "data-ww-kind";
@@ -448,7 +452,10 @@ export function normalizeSeo(raw) {
   const gtm = GTM_ID.test(String(raw.gtm ?? "").trim().toUpperCase()) ? String(raw.gtm).trim().toUpperCase() : "";
   const pinterest = PINTEREST_TOKEN.test(String(raw.pinterest ?? "").trim().toLowerCase()) ? String(raw.pinterest).trim().toLowerCase() : "";
   const facebook = FACEBOOK_TOKEN.test(String(raw.facebook ?? "").trim().toLowerCase()) ? String(raw.facebook).trim().toLowerCase() : "";
-  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook) return null;
+  const sameAs = normalizeSameAs(raw.sameAs);
+  // When Online presence last changed them, for its "Done for you" list.
+  const sameAsAt = sameAs.length && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(String(raw.sameAsAt ?? "")) ? String(raw.sameAsAt) : "";
+  if (!googleMeta.length && !googleFile.length && !bing && !ga4 && !gtm && !pinterest && !facebook && !sameAs.length) return null;
   return {
     ...(googleMeta.length ? { googleMeta } : {}),
     ...(googleFile.length ? { googleFile } : {}),
@@ -456,8 +463,93 @@ export function normalizeSeo(raw) {
     ...(ga4 ? { ga4 } : {}),
     ...(gtm ? { gtm } : {}),
     ...(pinterest ? { pinterest } : {}),
-    ...(facebook ? { facebook } : {})
+    ...(facebook ? { facebook } : {}),
+    ...(sameAs.length ? { sameAs } : {}),
+    ...(sameAsAt ? { sameAsAt } : {})
   };
+}
+
+// ---- The business's own listings -------------------------------------------
+//
+// seo.sameAs: the business's Google, Yelp, Facebook and other listings, as Online presence confirmed them
+// (src/get-found/business-links.js). While a page is served they are added to the business its structured data
+// already describes (schema.org sameAs), which is how search engines and AI assistants tie the website to those
+// listings and its reviews. Nothing is added to a page that describes no business, and a link the page already
+// has is not added twice.
+const MAX_SAME_AS = 12;
+const NOT_A_BUSINESS = /^(?:WebSite|WebPage|\w+Page|BreadcrumbList|ItemList|ListItem|SiteNavigationElement|Product|ProductGroup|IndividualProduct|Offer|AggregateOffer|\w*Event|\w*Article|BlogPosting|Blog|Review|AggregateRating|Rating|ImageObject|VideoObject|MediaObject|Question|Answer|HowTo|Recipe|Course|JobPosting|Menu|MenuItem|MenuSection|Service|PostalAddress|GeoCoordinates|ContactPoint|OpeningHoursSpecification|Thing|CreativeWork|Collection|SearchAction|Place|City|Country|State|AdministrativeArea|Person)$/i;
+const BUSINESS_TYPE = /Organization|Business|Store|Shop|Restaurant|Service|Agency|Office|Clinic|Corporation|NGO/i;
+
+// Whether one structured data entry describes a business: an Organization or any kind of LocalBusiness (a ClothingStore,
+// a Winery, a Dentist), by its type or by the address, phone or hours only a place of business states.
+export function isBusinessEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const types = [].concat(entry["@type"] || []).map((type) => String(type)).filter(Boolean);
+  if (!types.length || types.some((type) => NOT_A_BUSINESS.test(type))) return false;
+  return types.some((type) => BUSINESS_TYPE.test(type))
+    || ["address", "telephone", "openingHours", "openingHoursSpecification", "geo"].some((key) => Boolean(entry[key]));
+}
+
+// What a link names, for telling two spellings of one listing apart: no www, no trailing slash, no tracking. The query
+// stays only where it names the page (a Facebook profile's id, a Google place, an Apple Maps place).
+export function sameAsKey(raw) {
+  let url;
+  try { url = new URL(String(raw ?? "").trim()); } catch { return ""; }
+  if (!["http:", "https:"].includes(url.protocol)) return "";
+  const host = url.hostname.toLowerCase().replace(/^(?:www|m|mobile)\./, "");
+  const path = url.pathname.replace(/\/+$/, "") || "";
+  const pick = (names) => names.filter((name) => url.searchParams.get(name)).map((name) => `${name}=${url.searchParams.get(name)}`).join("&");
+  const query = /(^|\.)facebook\.com$/.test(host) && /^\/profile\.php$/i.test(path) ? pick(["id"])
+    : /(^|\.)google\.[a-z.]+$/.test(host) ? pick(["q", "cid", "query_place_id"])
+      : /^maps\.apple(\.com)?$/.test(host) ? pick(["place-id", "auid", "q", "address", "ll"]) : "";
+  return `${host}${path.toLowerCase()}${query ? `?${query}` : ""}`;
+}
+
+// A link that names no page of its own: Facebook's profile.php without its id is every profile at once.
+const brokenLink = (url) => /^facebook\.com\/profile\.php$/.test(sameAsKey(url));
+
+// The stored list: https links only, one per listing, at most MAX_SAME_AS.
+export function normalizeSameAs(list) {
+  const seen = new Set();
+  const kept = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const url = String(item ?? "").trim();
+    const key = sameAsKey(url);
+    if (!/^https:\/\//i.test(url) || url.length > 500 || !key || brokenLink(url) || seen.has(key)) continue;
+    seen.add(key);
+    kept.push(url);
+    if (kept.length >= MAX_SAME_AS) break;
+  }
+  return kept;
+}
+
+// One <script type="application/ld+json"> with these links added to each business it describes, a broken or repeated
+// link it already had taken out. The text comes back unchanged when there is nothing to do or it cannot be read.
+export function withBusinessLinks(text, links) {
+  const wanted = normalizeSameAs(links);
+  let parsed;
+  try { parsed = JSON.parse(String(text)); } catch { return text; }
+  let changed = false;
+  const visit = (entry) => {
+    if (!isBusinessEntry(entry)) return;
+    const had = [].concat(entry.sameAs || []).filter((item) => typeof item === "string");
+    const seen = new Set();
+    const next = [];
+    for (const url of [...had, ...wanted]) {
+      const key = sameAsKey(url);
+      if (!key || brokenLink(url) || seen.has(key)) continue;
+      seen.add(key);
+      next.push(url);
+    }
+    if (next.length === had.length && next.every((url, index) => url === had[index]) && (Array.isArray(entry.sameAs) || !next.length)) return;
+    if (next.length) entry.sameAs = next; else delete entry.sameAs;
+    changed = true;
+  };
+  for (const entry of [].concat(parsed || [])) {
+    visit(entry);
+    if (entry && Array.isArray(entry["@graph"])) entry["@graph"].forEach(visit);
+  }
+  return changed ? JSON.stringify(parsed).replace(/</g, "\\u003c") : text;
 }
 
 // Only an identifier is ever stored; the snippet is ours. Kept identical to
@@ -893,6 +985,15 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
     transforms.push({
       selector: "head",
       apply(element) { element.append(seoHead, { html: true }); }
+    });
+  }
+  // The business's own listings, added to the business the page's structured data describes. A transform with `text`
+  // is given the element's whole text and returns what replaces it (site-content-worker.js gathers the pieces).
+  if (resolved.seo?.sameAs?.length) {
+    const links = resolved.seo.sameAs;
+    transforms.push({
+      selector: 'script[type="application/ld+json"]',
+      text(value) { return withBusinessLinks(value, links); }
     });
   }
   if (highlight) {
