@@ -212,6 +212,39 @@ export async function scanPage(page, { tags = WCAG_21_AA_TAGS, scriptPath } = {}
           return "";
         }
       };
+      // FADED TEXT (Larkfield Plumbing & Drain, staging rehearsal, Nov 25 2026): axe blends an element's opacity, and
+      // every ancestor's, into the foreground it reports, so a colour chosen against that blend is faded again once
+      // written. The repair (readableTextColour in accessibility-fast-agent.mjs) chooses for after the fade, from:
+      // `opacity`, the product of the text's and its ancestors' opacities; `ownOpacity`, the text element's own, the one
+      // fade a repair may lift; and `fill`, the backdrop's own colour when the fade reaches it too (an ancestor at or
+      // above the painted fill fades text and fill together, so the measured background is itself a blend).
+      const fade = (target) => {
+        try {
+          const element = document.querySelector(target);
+          if (!element) return null;
+          const hex = (text) => {
+            const parts = /^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?/.exec(String(text || ""));
+            if (!parts || (parts[4] !== undefined && Number(parts[4]) < 1)) return "";
+            return `#${parts.slice(1, 4).map((part) => Math.round(Number(part)).toString(16).padStart(2, "0")).join("")}`;
+          };
+          let opacity = 1;
+          let above = 1;
+          let filled = null;
+          for (let node = element; node && node.nodeType === 1; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            const own = Number(style.opacity);
+            if (Number.isFinite(own)) opacity *= own;
+            if (!filled && !/^(?:transparent|rgba\([^)]*,\s*0\))$/.test(style.backgroundColor)) filled = node;
+            if (filled && Number.isFinite(own)) above *= own;
+          }
+          if (!(opacity < 0.999)) return null;
+          const own = Number(getComputedStyle(element).opacity);
+          const fill = filled && above < 0.999 ? hex(getComputedStyle(filled).backgroundColor) : "";
+          return { opacity: Math.round(opacity * 1000) / 1000, ...(own < 0.999 ? { ownOpacity: Math.round(own * 1000) / 1000 } : {}), ...(fill ? { fill } : {}) };
+        } catch {
+          return null;
+        }
+      };
       // A transparent header over a photo cannot be judged against the page colour, and axe only marks such
       // text "needs review". The header's runtime measured the photo, so that measurement decides: enough
       // contrast settles the text, too little is reported, and an unreadable photo is left to the deployed scan.
@@ -278,6 +311,7 @@ export async function scanPage(page, { tags = WCAG_21_AA_TAGS, scriptPath } = {}
             const { selector: colourTarget, shared: colourShared } = violation.id === "color-contrast" ? colourSource(target) : { selector: "", shared: false };
             const sourceRule = violation.id === "color-contrast" && !colourTarget ? colourRule(target) : "";
             const fillRule = violation.id === "color-contrast" ? backgroundRule(target) : "";
+            const faded = violation.id === "color-contrast" ? fade(target) : null;
             return {
               target,
               ...(node.adaptiveHeader ? { adaptiveHeader: true } : {}),
@@ -286,6 +320,7 @@ export async function scanPage(page, { tags = WCAG_21_AA_TAGS, scriptPath } = {}
               ...(colourShared ? { colourShared: true } : {}),
               ...(sourceRule ? { colourRule: sourceRule } : {}),
               ...(fillRule ? { backgroundRule: fillRule } : {}),
+              ...(faded || {}),
               html: String(node.html || "").slice(0, 400),
               failureSummary: String(node.failureSummary || "").slice(0, 600)
             };

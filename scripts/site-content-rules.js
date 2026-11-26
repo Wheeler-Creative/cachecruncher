@@ -62,7 +62,8 @@ export const CONTENT_VERSION = 1;
 // 4: the words a photograph place reads aloud (a logo's alt), and the header and footer as fields of their own.
 // 5: a sentence's words with **bold**, *italic* and line breaks (FORMAT_ATTRIBUTE).
 // 6: the business's own listings (seo.sameAs) added to its structured data.
-export const CONTENT_RULES_VERSION = 6;
+// 7: a picture place nobody has filled is hidden from visitors (EMPTY_PICTURE_PLACE_CSS).
+export const CONTENT_RULES_VERSION = 7;
 
 export const EDIT_ATTRIBUTE = "data-ww-edit";
 export const KIND_ATTRIBUTE = "data-ww-kind";
@@ -791,6 +792,40 @@ export function imageContent(content) {
       .map(([id, { alt, ...value }]) => [id, value])) };
 }
 
+// AN EMPTY PICTURE PLACE IS NOT DRAWN FOR A VISITOR (owner, Nov 25 2026, about 9 PM US Central: "A picture place the
+// owner hasn't filled is hidden from visitors"). The staging rehearsal's previews showed blank frames where a photograph
+// belonged: Hale & Okafor's partner portraits on /our-team/, a place on /practice-areas/ only the firm can fill, and every
+// atmosphere place past the made-picture fill's limit (Stillwater Yoga's /teachers/, Muddy Paws' home page). The review
+// then judged those frames before the fill had landed (Isla Brennan's /weddings/, build 53fe7582). So for a visitor:
+//   - the place itself (our placeholder: a <div class="image-placeholder" role="img"> with nothing in it) is not drawn,
+//     nor a wrapper that holds nothing else (the card's or column's picture box, a figure whose only words are the
+//     picture's caption);
+//   - a box of exactly two, the picture's and the words', becomes one column: a two-column hero or a portrait beside a
+//     biography reads as the words alone, at the box's full width, never squeezed into half of it with a gap beside;
+//   - a card keeps its words; a grid of tiles closes up by itself, as each hidden tile takes no cell.
+// A filled place is an <img class="image-placeholder"> (the site's Worker replaces the div when the owner or the fill
+// chooses a picture: contentTransforms below), so it is never matched. In the editor the frames stay, for the owner to
+// click: the editor loads the page with ?ww-slot=, and the site's Worker then adds <style data-ww-preview> to its head
+// (PREVIEW_STYLE), which turns every rule here off. The console's list of places to fill reads the page's markup, not
+// what is drawn, so it is unchanged. A browser without :has() draws the frames as before.
+const EMPTY_PLACE = 'div.image-placeholder[role="img"]:empty';
+const EMPTY_PLACE_BOX = `:is(div,figure,picture,span):has(> ${EMPTY_PLACE}:only-child)`;
+const VISITOR = ":root:not(:has(style[data-ww-preview]))";
+const PLACE_BESIDE_WORDS = `${VISITOR} :has(> :nth-child(2):last-child):has(> ${EMPTY_PLACE},> :is(div,figure,picture,span) > ${EMPTY_PLACE}:only-child)`;
+export const EMPTY_PICTURE_PLACE_CSS = [
+  `${VISITOR} :is(${EMPTY_PLACE},${EMPTY_PLACE_BOX},figure:has(> ${EMPTY_PLACE}):not(:has(> :not(${EMPTY_PLACE},figcaption)))){display:none!important}`,
+  `${PLACE_BESIDE_WORDS}{grid-template-columns:minmax(0,1fr)!important;grid-template-areas:none!important}`,
+  `${PLACE_BESIDE_WORDS} > *{grid-column:auto!important;grid-row:auto!important;grid-area:auto!important;flex:1 1 auto!important;width:auto!important}`
+].join("\n");
+
+// TWO PATHS, ONE RULE. A page built since Nov 25 2026 carries this rule in its render-safety block
+// (scripts/generation/generate-site-build.mjs imports it from here). A website already live was built without it and is
+// not rebuilt, so its Worker adds it to every page it serves a visitor (contentTransforms, at the end of the page's <head>),
+// and the fleet rollout after a release copies this file into each site. A page with both is drawn exactly as with one:
+// the copies are the same rules, so the later one changes no outcome (empty-picture-places-browser.test.mjs measures it).
+// Not added in the editor's view, nor to a page the platform reads as written (site-content-worker.js).
+export const EMPTY_PICTURE_PLACE_STYLE = `<style data-ww-empty-places="1">\n${EMPTY_PICTURE_PLACE_CSS}\n</style>`;
+
 // ---- The transform ---------------------------------------------------------
 
 // One selector, one handler, dispatching on the kind the page declares.
@@ -967,7 +1002,7 @@ img.image-placeholder { border: none !important; background: none !important; mi
 })();
 </script>`;
 
-export function contentTransforms(content, { highlight = "", preview = null, origin = "", images = null, attributes = SOURCE_ATTRIBUTES } = {}) {
+export function contentTransforms(content, { highlight = "", preview = null, origin = "", images = null, attributes = SOURCE_ATTRIBUTES, hideEmptyPlaces = !highlight } = {}) {
   const resolved = parseContent(content);
   const transforms = [];
   // A share image has to be an absolute URL, and the address a site answers on is only known per request.
@@ -1000,6 +1035,14 @@ export function contentTransforms(content, { highlight = "", preview = null, ori
     transforms.push({
       selector: "head",
       apply(element) { element.append(PREVIEW_STYLE, { html: true }); }
+    });
+  }
+  // Every page a visitor is served hides the picture places nobody has filled (EMPTY_PICTURE_PLACE_CSS), so a website
+  // built before its pages carried the rule hides them too. Never in the editor: its frames are for the owner to click.
+  if (hideEmptyPlaces && !highlight) {
+    transforms.push({
+      selector: "head",
+      apply(element) { element.append(EMPTY_PICTURE_PLACE_STYLE, { html: true }); }
     });
   }
   // A piece inside a link cannot take another (links do not nest), and one inside a <picture> cannot be wrapped, so

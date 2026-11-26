@@ -7,6 +7,10 @@
 //   3. Missing lang attributes: ensures valid <html lang="en">
 //   4. Missing landmarks: wraps main content in <main>
 //   5. Empty link/button names: adds aria-label from href or icon context
+//   6. Unlabelled form controls: aria-label from placeholder, name or type
+//   7. Scrollable regions: a tab stop for a scroll container with nothing focusable in it,
+//      from a scan or, before the page is drawn, from the site's own stylesheet
+//   8. Links in running text: underlined (link-in-text-block)
 //
 // If any complex defect remains, falls back to a fast targeted patch model.
 
@@ -112,7 +116,8 @@ export function adjustColorForContrast(fgStr, bgStr, minRatio = 4.54) {
 }
 
 // One shade at a time towards black (darken) or white, until the colour reads on bg at minRatio; null if it never does.
-function stepTowards(fg, bg, minRatio, darken) {
+// `shown` is what a colour looks like once drawn (faded text, readableTextColour); the colour returned is the one to write.
+function stepTowards(fg, bg, minRatio, darken, shown = (colour) => colour) {
   let { r, g, b } = fg;
   for (let step = 0; step < 255; step += 1) {
     if (darken) {
@@ -124,9 +129,47 @@ function stepTowards(fg, bg, minRatio, darken) {
       g = Math.min(255, Math.ceil(g + (255 - g) * 0.06));
       b = Math.min(255, Math.ceil(b + (255 - b) * 0.06));
     }
-    if (contrastRatio({ r, g, b }, bg) >= minRatio) return `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
+    if (contrastRatio(shown({ r, g, b }), bg) >= minRatio) return `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
   }
   return null;
+}
+
+// FADED TEXT IS REPAIRED AS IT IS DRAWN (staging rehearsal, Nov 25 2026, about 9:55 PM Central). Larkfield Plumbing &
+// Drain's call-to-action band (#e8660d) carries `.cta-band .cta-details { color: var(--color-on-accent); opacity: 0.9 }`.
+// axe blends the opacity in: it measured #29272b, the 0.9 blend of #14202e over the orange, at 4.46:1. The repair
+// darkened that blend one shade to #272529, which passes only when drawn solid; drawn at 0.9 it was lighter again and
+// still failed. Each round then darkened the next blend, and since every blend pulls towards the orange the colours
+// drifted brown (#332115, then #2f241e at 3.97:1): two repair builds, $11.33 and 29 minutes, ended `exhausted`.
+//
+// So the colour is chosen for after the fade. Text whose element and ancestors multiply to opacity A over a fill B is
+// drawn, channel by channel as axe and the browser blend it, as behind + A x (colour - B), where `behind` is the measured
+// background (B itself unless the fill is faded too). The design's fade is kept: a colour that reads at 0.9 is written
+// and the 0.9 stays, which is the look closest to the design. Only when no colour can read through the fade (black and
+// white both fail at that opacity) does the text's own opacity go to 1 as well (`opaque`); the colour is then chosen
+// for the opacity its ancestors leave. An ancestor's fade is never lifted: it fades a whole section, the design's look.
+// `opacity` and `fill` come from the scan (accessibility-lib.mjs scanPage: node.opacity, node.ownOpacity, node.fill).
+export function drawnColour(colour, behind, { opacity = 1, fill = null } = {}) {
+  const front = typeof colour === "string" ? parseColor(colour) : colour;
+  const back = typeof behind === "string" ? parseColor(behind) : behind;
+  const base = (typeof fill === "string" ? parseColor(fill) : fill) || back;
+  const alpha = Number.isFinite(Number(opacity)) ? Math.min(1, Math.max(0, Number(opacity))) : 1;
+  if (!front || !back || alpha >= 1) return front;
+  const channel = (key) => Math.min(255, Math.max(0, back[key] + alpha * (front[key] - base[key])));
+  return { r: channel("r"), g: channel("g"), b: channel("b") };
+}
+
+// The colour written for text axe measured as `measured` through that fade: the measurement undone, to the nearest whole shade.
+function undrawnColour(measured, behind, { opacity = 1, fill = null } = {}) {
+  const front = parseColor(measured);
+  const back = parseColor(behind);
+  const base = parseColor(fill || "") || back;
+  const alpha = Number(opacity);
+  if (!front || !back || !(alpha > 0 && alpha < 1)) return front;
+  const channel = (key) => Math.round(Math.min(255, Math.max(0, base[key] + (front[key] - back[key]) / alpha)));
+  const r = channel("r");
+  const g = channel("g");
+  const b = channel("b");
+  return { r, g, b, hex: `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}` };
 }
 
 // THE TEXT MOVES, NEVER ITS BACKGROUND (owner, Nov 24 2026). The nearest shade of the text's own colour that reads on
@@ -137,17 +180,90 @@ function stepTowards(fg, bg, minRatio, darken) {
 // The fill used to move instead: TheGlamourAddict's copy (Nov 24 2026) turned every product and blog card from her
 // #ff8091 to a pale #ffd5dc, and her testimonial band to #b55965, to fix a grey maker line, grey prices and white
 // quotes. `reversed` says the text had to turn: such a colour suits only the place it was measured in.
-export function readableTextColour(fgStr, bgStr, minRatio = 4.54) {
-  const fg = parseColor(fgStr);
+export function readableTextColour(fgStr, bgStr, minRatio = 4.54, { opacity = 1, ownOpacity = 1, fill = null } = {}) {
   const bg = parseColor(bgStr);
-  if (!fg || !bg) return null;
-  if (contrastRatio(fg, bg) >= minRatio) return { colour: fg.hex, reversed: false };
-  const darker = relativeLuminance(fg) <= relativeLuminance(bg);
-  const own = stepTowards(fg, bg, minRatio, darker);
-  if (own) return { colour: own, reversed: false };
-  const other = stepTowards(fg, bg, minRatio, !darker);
-  return other ? { colour: other, reversed: true } : null;
+  if (!parseColor(fgStr) || !bg) return null;
+  const faded = Number(opacity) > 0 && Number(opacity) < 1;
+  const fg = faded ? undrawnColour(fgStr, bgStr, { opacity, fill }) : parseColor(fgStr);
+  const at = (alpha) => {
+    const shown = (colour) => drawnColour(colour, bg, { opacity: alpha, fill });
+    const ratio = (colour) => contrastRatio(shown(parseColor(colour)), bg);
+    if (contrastRatio(shown(fg), bg) >= minRatio) return { colour: fg.hex, reversed: false, ratio: ratio(fg.hex) };
+    const darker = relativeLuminance(shown(fg)) <= relativeLuminance(bg);
+    const own = stepTowards(fg, bg, minRatio, darker, shown);
+    if (own) return { colour: own, reversed: false, ratio: ratio(own) };
+    const other = stepTowards(fg, bg, minRatio, !darker, shown);
+    return other ? { colour: other, reversed: true, ratio: ratio(other) } : null;
+  };
+  const kept = at(faded ? Number(opacity) : 1);
+  if (kept || !faded) return kept;
+  // No colour reads through the fade: the text's own fade is lifted, its ancestors' kept.
+  const own = Number(ownOpacity);
+  if (!(own > 0 && own < 1)) return null;
+  const lifted = at(Math.min(1, Number(opacity) / own));
+  return lifted ? { ...lifted, opaque: true } : null;
 }
+
+// ── Never worse ─────────────────────────────────────────────────────────────
+
+// NO COLOUR REPAIR MAY LEAVE TEXT HARDER TO READ THAN IT WAS (Hale & Okafor Family Law rehearsal, Nov 25 2026). A rule
+// chosen on one page's /contact/ button made the same button on four other pages 1.14:1 (pageState above). Whatever
+// chose a colour, it is re-checked against every backdrop the text was measured on before it is written: text that
+// failed must read better than it did, and text that passed must still pass. A colour that cannot do both for every
+// measurement is not written; the failure stays reported and goes to the review repair.
+//
+// A measurement is what axe saw: { fg, bg, ratio, expected } plus the fade (opacity, ownOpacity, fill) when the text is
+// faded. `fg` is then axe's blend, and the new colour is drawn through the same fade (drawnColour).
+export function contrastAfter(colour, measurement, { opaque = false } = {}) {
+  const front = parseColor(colour);
+  const back = parseColor(measurement?.bg);
+  if (!front || !back) return null;
+  const alpha = Number(measurement.opacity);
+  const faded = alpha > 0 && alpha < 1;
+  const own = Number(measurement.ownOpacity) > 0 ? Number(measurement.ownOpacity) : 1;
+  const fade = faded ? { opacity: opaque ? Math.min(1, alpha / own) : alpha, fill: measurement.fill || null } : {};
+  return contrastRatio(drawnColour(front, back, fade), back);
+}
+
+// The contrast the measurement had: its own colours when both are known, else the ratio axe printed.
+function contrastBefore(measurement) {
+  const front = parseColor(measurement?.fg);
+  const back = parseColor(measurement?.bg);
+  if (front && back) return contrastRatio(front, back);
+  const printed = Number(measurement?.ratio);
+  return Number.isFinite(printed) && printed > 0 ? printed : null;
+}
+
+// True when `colour` leaves every measured text no worse: failing text reads better, passing text still passes.
+// A measurement that cannot be read proves nothing either way and is passed over.
+export function neverWorse(colour, measurements = [], { opaque = false } = {}) {
+  if (!parseColor(colour)) return false;
+  for (const measurement of measurements || []) {
+    const before = contrastBefore(measurement);
+    const after = contrastAfter(colour, measurement, { opaque });
+    if (before === null || after === null) continue;
+    const expected = Number(measurement.expected) > 0 ? Number(measurement.expected) : 4.5;
+    if (before < expected ? after <= before + 0.005 : after < expected) return false;
+  }
+  return true;
+}
+
+// A rule's measurements in one list, each backdrop once, capped so it can travel with the rule in a job result.
+const MEASUREMENTS_PER_RULE = 6;
+function measurementsOf(rules) {
+  const seen = new Map();
+  for (const rule of rules || []) {
+    for (const measurement of Array.isArray(rule?.measured) ? rule.measured : []) {
+      if (!parseColor(measurement?.bg)) continue;
+      const key = `${parseColor(measurement.fg)?.hex || measurement.ratio}|${parseColor(measurement.bg).hex}|${measurement.opacity || 1}`;
+      if (!seen.has(key)) seen.set(key, measurement);
+    }
+  }
+  // The failing ones first: they are the ones a cap must never drop.
+  return [...seen.values()].sort((a, b) => (contrastBefore(a) || 0) - (contrastBefore(b) || 0)).slice(0, MEASUREMENTS_PER_RULE);
+}
+
+const declaredColour = (declaration) => (/^color:/.test(String(declaration || "")) ? /#[0-9a-f]{6}\b/i.exec(declaration)?.[0] || null : null);
 
 // ── Extracting Color Information from axe-core Violations ────────────────────
 
@@ -165,13 +281,20 @@ export function extractContrastFailures(violations = []) {
           target: node.target,
           fg: fgMatch[1].trim(),
           bg: bgMatch[1].trim(),
-          html: node.html || ""
+          html: node.html || "",
+          // What the scan saw fading the text (scanPage): axe's foreground is then a blend, not a colour any rule wrote.
+          ...(fadedText(node) ? { opacity: Number(node.opacity) } : {})
         });
       }
     }
   }
   return failures;
 }
+
+// Text drawn at an opacity below 1 by itself or an ancestor, as the scan measured it.
+const fadedText = (node) => Number(node?.opacity) > 0 && Number(node.opacity) < 1;
+// The fade the scan measured for a node, in the shape readableTextColour takes.
+const fadeOf = (node) => (fadedText(node) ? { opacity: Number(node.opacity), ownOpacity: Number(node.ownOpacity) || 1, fill: node.fill || null } : {});
 
 // ── Deterministic CSS Resolver ──────────────────────────────────────────────
 
@@ -188,7 +311,11 @@ const OVERRIDES_END = "/* ww-a11y-overrides:end */";
 const POSITIONAL = /:nth-(?:child|of-type|last-child|last-of-type)\([^)]*\)/g;
 // A rule's own selector re-declared later in the cascade carries no !important: text the source styled more
 // specifically (white over a photo) keeps its colour.
-const ALLOWED_DECLARATION = /^(?:(?:background-)?color: #[0-9a-f]{6}(?: !important)?|text-decoration: underline !important)$/;
+// Faded text no colour can make readable has its own fade lifted (readableTextColour), always with !important: an
+// opacity that stays below 1 would leave the repair writing the same rule every round.
+const ALLOWED_DECLARATION = /^(?:(?:background-)?color: #[0-9a-f]{6}(?: !important)?|opacity: 1 !important|text-decoration: underline !important)$/;
+// A declaration that changes how one place's text looks, and so must name that place (specificEnough, reachesWholeClass).
+const PLACED_DECLARATION = /^(?:(?:background-)?color|opacity):/;
 
 function targetText(target) {
   return (Array.isArray(target) ? target.join(" ") : String(target || "")).replace(/\s+/g, " ").trim();
@@ -253,13 +380,36 @@ function placedTarget(selector, html) {
   return ownTarget(html) || selector;
 }
 
-// The failing element's own edit id, from its opening tag only (a child's id is not the element's), or null.
-function ownTarget(html) {
+// The failing element's own edit id, from its opening tag only (a child's id is not the element's), held to the state
+// it was measured in (pageState), or null.
+export function ownTarget(html) {
   const source = String(html || "").trim();
   const edit = /^<[^>]*\bdata-ww-edit="([\w:.-]{1,120})"/i.exec(source)?.[1];
   if (!edit) return null;
   const tag = /^<([a-z][a-z0-9-]*)/i.exec(source)?.[1]?.toLowerCase() || "";
-  return `${tag}[data-ww-edit="${edit}"]`;
+  return `${tag}[data-ww-edit="${edit}"]${pageState(source)}`;
+}
+
+// ONE ELEMENT, A DIFFERENT FILL ON ONE PAGE (staging rehearsal, Nov 25 2026, about 11 PM Central). Hale & Okafor Family
+// Law's header button "Book Consultation" links to /contact/. On that page the framework marks it aria-current="page",
+// and the site's `.nav-list li a[aria-current="page"]` gives it the pale #e5edf8 fill; on the other four pages it is the
+// blue #2c5cab button. Its edit id is the same everywhere, so a rule chosen on one page reached it on all of them: the
+// first round made it #d6d9df for the blue (and 1.19:1 on /contact/), the next chose #646769 on /contact/, which left
+// the four blue buttons at 1.14:1, and the next went back to #d8d9d9. A link to one of the site's pages is the current
+// link on exactly one page, so a rule measured on it says which: [aria-current] where it is current, :not([aria-current])
+// where it is not. The colour then reaches only the button with the fill it was chosen on.
+function pageState(html) {
+  const open = /^<[^>]*(?:>|$)/.exec(String(html || "").trim())?.[0] || "";
+  if (/\saria-current(?:\s*=\s*"(?!false")[^"]*"|(?=[\s/>]|$))/i.test(open)) return "[aria-current]";
+  const tag = /^<([a-z][a-z0-9-]*)/i.exec(open)?.[1]?.toLowerCase();
+  const href = /\shref\s*=\s*"([^"]*)"/i.exec(open)?.[1];
+  return tag === "a" && typeof href === "string" && /^\/(?!\/)/.test(href) ? ":not([aria-current])" : "";
+}
+
+// The measured element's selector held to its page state, unless the selector already says it.
+function inPageState(selector, html) {
+  const state = pageState(html);
+  return !state || !selector || /\[aria-current\b/.test(selector) ? selector : `${selector}${state}`;
 }
 
 // Rules are written against the colour the browser measured, so they work when
@@ -279,29 +429,40 @@ function contrastRules(violations) {
       const expected = Number(/Expected contrast ratio of ([\d.]+):1/i.exec(summary)?.[1]) || 4.5;
       // The failing text takes the nearest shade that reads; the background is the site's own and is never written
       // (a card's or a band's fill is shared by everything on it, and is the site's look).
-      const readable = readableTextColour(fg, bg, expected + 0.04);
-      if (!readable || contrastRatio(readable.colour, bg) < expected) continue;
+      // Faded text is given the colour that reads once faded (readableTextColour); its own fade is lifted only when no
+      // colour can (`opaque`), and that opacity rule goes wherever its colour rule goes.
+      const readable = readableTextColour(fg, bg, expected + 0.04, fadeOf(node));
+      if (!readable || readable.ratio < expected) continue;
       const color = readable.colour.toLowerCase();
+      // What was measured travels with the rule, so every later step can prove it never worse (neverWorse).
+      const printed = Number(/contrast of ([\d.]+)/i.exec(summary)?.[1]);
+      const seen = { fg: parseColor(fg).hex, bg: parseColor(bg).hex, ratio: printed > 0 ? printed : Math.round(contrastRatio(fg, bg) * 100) / 100, expected, ...fadeOf(node) };
+      if (!seen.fill) delete seen.fill;
+      const lift = (rule) => {
+        const proved = { ...rule, measured: [seen], ...(readable.opaque ? { opaque: true } : {}) };
+        return readable.opaque ? [proved, { ...proved, declaration: "opacity: 1 !important" }] : [proved];
+      };
       const measured = targetText(node.colourTarget || node.scopedTarget || node.target);
-      const exact = node.colourTarget || node.scopedTarget ? measured : placedTarget(measured, node.html);
+      // The measured element only in the page state it was measured in (pageState); a class carrier is not the element.
+      const exact = node.colourTarget ? measured : inPageState(node.scopedTarget ? measured : placedTarget(measured, node.html), node.html);
       // EVERY FAILING ELEMENT GETS ITS FIX (owner, Nov 11 2026: "Dont let things fail but force it to be fixed"). Where
       // the colour comes from a class other elements share, the class is never recoloured; the element's own edit id,
       // which nothing else carries, takes the colour instead, so white text over a photo elsewhere keeps its colour.
       const own = ownTarget(node.html);
-      const onOwn = () => { if (own) rules.push({ selector: own, exact: own, declaration: `color: ${color} !important` }); };
+      const onOwn = () => { if (own) rules.push(...lift({ selector: own, exact: own, declaration: `color: ${color} !important` })); };
       // A source rule fixes every element it colours in one round. A colour that had to turn (white words made dark)
       // goes on it only when the rule is held to the measured place; otherwise the measured element takes it below.
       if (node.colourRule && !node.colourTarget && (!readable.reversed || namesPlace(node.colourRule))) {
         if (reachesWholeClass(node.colourRule)) { onOwn(); continue; }
         const held = onFill(node.colourRule, node.backgroundRule);
-        rules.push({ selector: held, exact: held, declaration: `color: ${color}`, sourceRule: true });
+        rules.push(...lift({ selector: held, exact: held, declaration: `color: ${color}`, sourceRule: true }));
         continue;
       }
       // The colour sits on a class that other elements carry. Only the scan's colourTarget proves each carrier in
       // its place failed; a bare class (an older scan, or axe's own selector) would recolour text that passes
       // where this one fails, so the page's own repair handles it instead.
       if (sharedClassSubject(exact) && !(node.colourTarget && anchored(exact))) { onOwn(); continue; }
-      rules.push({ selector: exact.replace(POSITIONAL, "").replace(/\s+/g, " ").trim(), exact, declaration: `color: ${color} !important` });
+      rules.push(...lift({ selector: exact.replace(POSITIONAL, "").replace(/\s+/g, " ").trim(), exact, declaration: `color: ${color} !important` }));
     }
   }
   return rules;
@@ -321,6 +482,8 @@ function linkRules(violations) {
 
 // One generalised rule fixes every match only when every match needs the same
 // value; when they disagree, each keeps its exact position instead.
+// Every colour written is then held to the floor (neverWorse) against what all the rules asking for it measured: the
+// first colour they asked for that leaves none of that text worse is written, and none is written when no colour can.
 export function consolidateOverrideRules(rules = []) {
   const groups = new Map();
   for (const rule of rules || []) {
@@ -328,34 +491,56 @@ export function consolidateOverrideRules(rules = []) {
     const key = `${rule.selector}\u0000${rule.declaration.split(":")[0]}`;
     groups.set(key, [...(groups.get(key) || []), rule]);
   }
+  // What each written rule will be, every rule that asked for it, and the declarations to try, best first. A later
+  // rule for the same place used to replace an earlier one outright; its declaration is now tried first instead.
   const out = new Map();
+  const place = (rule, from, options) => {
+    const key = `${rule.selector}\u0000${rule.declaration.split(":")[0]}`;
+    const entry = out.get(key);
+    if (!entry) { out.set(key, { rule, from: [...from], options: [...new Set(options)] }); return; }
+    entry.rule = rule;
+    entry.from.push(...from);
+    entry.options = [...new Set([...options, ...entry.options])];
+  };
   for (const list of groups.values()) {
     // One source colour rule failing against different backgrounds needs the colour that passes on all of them.
     if (list[0].sourceRule) {
-      const lightness = (rule) => relativeLuminance(parseColor(/#[0-9a-f]{6}/i.exec(rule.declaration)[0]));
+      if (!isSafeOverrideSelector(list[0].selector) || reachesWholeClass(list[0].selector)) continue;
+      const property = list[0].declaration.split(":")[0];
+      const rule = { selector: list[0].selector, exact: list[0].selector, declaration: list[0].declaration, sourceRule: true };
+      if (property === "opacity") { place(rule, list, [rule.declaration]); continue; }
+      const lightness = (each) => relativeLuminance(parseColor(/#[0-9a-f]{6}/i.exec(each.declaration)[0]));
       const ordered = [...list].sort((a, b) => lightness(a) - lightness(b));
       // Dark text was darkened and light text lightened; the furthest move passes everywhere the others did.
-      const darkest = lightness(ordered[0]) < 0.5 ? ordered[0].declaration : ordered.at(-1).declaration;
-      if (isSafeOverrideSelector(list[0].selector) && !reachesWholeClass(list[0].selector)) {
-        const property = list[0].declaration.split(":")[0];
-        out.set(`${list[0].selector}\u0000${property}`, { selector: list[0].selector, exact: list[0].selector, declaration: darkest, sourceRule: true });
-      }
+      const furthest = lightness(ordered[0]) < 0.5 ? ordered : [...ordered].reverse();
+      place({ ...rule, declaration: furthest[0].declaration }, list, furthest.map((each) => each.declaration));
       continue;
     }
     const agreed = new Set(list.map((rule) => rule.declaration)).size === 1;
     const chosen = agreed ? [list[0]] : list.map((rule) => ({ ...rule, selector: rule.exact || rule.selector }));
     for (const candidate of chosen) {
-      // A colour on a bare element selector would recolour that element everywhere, including where it already passes.
-      const rule = candidate.declaration.startsWith("color") && !specificEnough(candidate.selector)
+      // A colour on a bare element selector would recolour that element everywhere, including where it already passes;
+      // an opacity there would un-fade it everywhere.
+      const rule = /^(?:color|opacity):/.test(candidate.declaration) && !specificEnough(candidate.selector)
         ? { ...candidate, selector: specificEnough(candidate.exact || "") ? candidate.exact : "" }
         : candidate;
       if (!isSafeOverrideSelector(rule.selector)) continue;
-      out.set(`${rule.selector}\u0000${rule.declaration.split(":")[0]}`, {
-        selector: rule.selector, exact: rule.exact || rule.selector, declaration: rule.declaration
-      });
+      place({ selector: rule.selector, exact: rule.exact || rule.selector, declaration: rule.declaration }, agreed ? list : [candidate], [rule.declaration]);
     }
   }
-  return [...out.values()];
+  const written = [];
+  for (const { rule, from, options } of out.values()) {
+    const measured = measurementsOf(from);
+    const opaque = from.some((each) => each.opaque);
+    const declaration = declaredColour(rule.declaration) && measured.length
+      ? options.find((option) => neverWorse(declaredColour(option), measured, { opaque }))
+      : rule.declaration;
+    if (!declaration) continue;
+    written.push({ ...rule, declaration, ...(measured.length ? { measured } : {}), ...(opaque ? { opaque: true } : {}) });
+  }
+  // A lifted fade belongs to the colour chosen with it: where the floor wrote no colour, the opacity is not written either.
+  const coloured = new Set(written.filter((rule) => declaredColour(rule.declaration)).map((rule) => rule.selector));
+  return written.filter((rule) => !/^opacity:/.test(rule.declaration) || !rule.measured || coloured.has(rule.selector));
 }
 
 export function accessibilityOverrideRules(violations = []) {
@@ -377,10 +562,15 @@ export function mergeOverrideRules(css, rules = []) {
     }
   }
   const changed = [];
+  // The edit-time repair applies rules a scan measured some time before: a colour that would leave any text it was
+  // measured on worse is refused here as well (neverWorse), and the fade lifted with it stays.
+  const refused = new Set((rules || []).filter((rule) => declaredColour(rule?.declaration) && Array.isArray(rule.measured) && rule.measured.length
+    && !neverWorse(declaredColour(rule.declaration), rule.measured, { opaque: Boolean(rule.opaque) })).map((rule) => rule.selector));
   for (const rule of rules || []) {
     if (!isSafeOverrideSelector(rule?.selector) || !ALLOWED_DECLARATION.test(String(rule?.declaration || ""))) continue;
     // Rules from an earlier builder may still name a whole generated class; they are not written.
-    if (/^(?:background-)?color:/.test(rule.declaration) && reachesWholeClass(rule.selector)) continue;
+    if (PLACED_DECLARATION.test(rule.declaration) && reachesWholeClass(rule.selector)) continue;
+    if (refused.has(rule.selector) && (declaredColour(rule.declaration) || (/^opacity:/.test(rule.declaration) && rule.measured))) continue;
     const key = `${rule.selector}\u0000${rule.declaration.split(":")[0]}`;
     if (existing.get(key)?.declaration === rule.declaration) continue;
     existing.set(key, { selector: rule.selector, declaration: rule.declaration });
@@ -390,9 +580,9 @@ export function mergeOverrideRules(css, rules = []) {
   // Forced colours on selectors that turned out to reach unrelated elements (a breadcrumb colour on buttons
   // sharing an editor label) stopped repairs converging; the failures they fixed are repaired at their source.
   for (const [key, rule] of existing) {
-    if (/^color: #[0-9a-f]{6} !important$/.test(rule.declaration) && !specificEnough(rule.selector)) existing.delete(key);
+    if (/^(?:color: #[0-9a-f]{6}|opacity: 1) !important$/.test(rule.declaration) && !specificEnough(rule.selector)) existing.delete(key);
     // A colour or fill an earlier round put on a whole generated class reached text nobody measured.
-    else if (/^(?:background-)?color:/.test(rule.declaration) && reachesWholeClass(rule.selector)) existing.delete(key);
+    else if (PLACED_DECLARATION.test(rule.declaration) && reachesWholeClass(rule.selector)) existing.delete(key);
   }
   const lines = [OVERRIDES_START, ...[...existing.values()].map((rule) => `${rule.selector} { ${rule.declaration}; }`), OVERRIDES_END];
   const before = block ? source.slice(0, start) : `${source.replace(/\s*$/, "")}\n\n`;
@@ -423,6 +613,13 @@ function readsOnPage(colour, css) {
   return contrastRatio(colour, pageBackground(css)) >= 4.5;
 }
 
+// A contrast failure is about text, so only a text colour is changed for it. A token named for a border, a fill, a
+// ring or a shadow holds a colour that is not text even when the value is the same (Flyloop, Nov 25 2026: the
+// literal replacement below also rewrote .trip-opt-stopover { border-left-color: #c4764f }).
+const NON_TEXT_WORDS = new Set(["border", "outline", "shadow", "ring", "divider", "stroke", "bg", "background", "surface",
+  "fill", "canvas", "page", "paper", "caret", "decoration", "underline", "scrollbar"]);
+const namesNonText = (name) => String(name).toLowerCase().split(/[-_]+/).some((word) => NON_TEXT_WORDS.has(word));
+
 export async function resolveCssContrastIssues(publicDir, violations = []) {
   const contrastFailures = extractContrastFailures(violations);
   const changes = [];
@@ -451,6 +648,7 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
     while ((varMatch = varRegex.exec(css)) !== null) {
       const varName = varMatch[1];
       const rawVal = varMatch[2].trim();
+      if (namesNonText(varName)) continue;
       const parsed = parseColor(rawVal);
       // A light value (e.g. rgba(255,255,255,.75)) is meant for dark backgrounds; darkening it for white would break them.
       if (parsed && relativeLuminance(parsed) <= 0.5) {
@@ -458,6 +656,8 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
         const currentRatio = contrastRatio(parsed, "#ffffff");
         if (currentRatio < 4.54) {
           const better = adjustColorForContrast(parsed.hex, "#ffffff", 4.54);
+          // Never worse where it is read: on a page that is not white, darker may be harder to read (neverWorse).
+          if (!neverWorse(better, [{ fg: parsed.hex, bg: pageBackground(css).hex }])) continue;
           const oldDeclaration = `${varName}:${rawVal}`;
           const newDeclaration = `${varName}: ${better}`;
           css = css.replace(new RegExp(`${escapeRegExp(varName)}\\s*:\\s*${escapeRegExp(rawVal)}`, "g"), newDeclaration);
@@ -480,6 +680,9 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
       const parsedFg = parseColor(fail.fg);
       const parsedBg = parseColor(fail.bg);
       if (!parsedFg || !parsedBg || hiddenBackground(fail.fg, fail.bg)) continue;
+      // Faded text's measured colour is a blend no stylesheet wrote, and a shade replaced here would be faded again
+      // (Larkfield Plumbing & Drain, Nov 25 2026): the measured element takes the colour that reads once faded instead.
+      if (fail.opacity) continue;
 
       if (contrastRatio(parsedFg, parsedBg) < 4.54) {
         const better = adjustColorForContrast(parsedFg.hex, parsedBg.hex, 4.54);
@@ -492,6 +695,11 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
         // Not readable on the page itself: leave the shared value and override the measured element below.
         if (!readsOnPage(better, css)) continue;
 
+        // Every text measured in this colour is recoloured by the replacement, whatever it was measured on: the new
+        // colour must leave each of them no worse (neverWorse), or the measured elements are repaired one by one below.
+        const sameColour = contrastFailures.filter((other) => !other.opacity && parseColor(other.fg)?.hex === parsedFg.hex);
+        if (!neverWorse(better, sameColour.map((other) => ({ fg: other.fg, bg: other.bg })))) continue;
+
         // Search for matches in CSS for the hex or 3-digit shorthand
         const candidates = [
           parsedFg.hex,
@@ -501,7 +709,9 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
         ].filter(Boolean);
 
         for (const candidate of candidates) {
-          const colorPropRegex = new RegExp(`(color\\s*:\\s*)${escapeRegExp(candidate)}([;}\\s])`, "gi");
+          // The color property itself: never border-left-color, background-color, outline-color or another colour
+          // whose name ends the same way.
+          const colorPropRegex = new RegExp(`(?<![\\w-])(color\\s*:\\s*)${escapeRegExp(candidate)}([;}\\s])`, "gi");
           if (colorPropRegex.test(css)) {
             css = css.replace(colorPropRegex, `$1${better}$2`);
             modified = true;
@@ -519,10 +729,15 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
         // A theme token that holds the text colour is fixed once, where every page reads it, instead of
         // one rule per element that would also pin the colour on pages where the header adapts to its backdrop.
         const tokenRegex = new RegExp(
-          `(--[\\w-]*(?:ink|title|text|colou?r|muted|fg|foreground|heading|label)[\\w-]*\\s*:\\s*)(?:${candidates.map(escapeRegExp).join("|")})(?![0-9a-f])`, "gi"
+          `(--([\\w-]*(?:ink|title|text|colou?r|muted|fg|foreground|heading|label)[\\w-]*)\\s*:\\s*)(?:${candidates.map(escapeRegExp).join("|")})(?![0-9a-f])`, "gi"
         );
-        if (tokenRegex.test(css)) {
-          css = css.replace(tokenRegex, `$1${better}`);
+        let tokenChanged = false;
+        css = css.replace(tokenRegex, (whole, declaration, name) => {
+          if (namesNonText(name)) return whole;
+          tokenChanged = true;
+          return `${declaration}${better}`;
+        });
+        if (tokenChanged) {
           modified = true;
           changes.push({
             file: path.relative(publicDir, cssPath),
@@ -545,7 +760,8 @@ export async function resolveCssContrastIssues(publicDir, violations = []) {
   const replaced = new Set(changes.filter((change) => change.type === "css_rule_contrast").map((change) => parseColor(change.before)?.hex));
   const unmatched = (violations || []).map((violation) => (violation.id !== "color-contrast" ? violation : {
     ...violation,
-    nodes: (violation.nodes || []).filter((node) => !replaced.has(parseColor(/foreground color:\s*(#[0-9a-f]{3,6})\b/i.exec(String(node.failureSummary || ""))?.[1] || "")?.hex))
+    nodes: (violation.nodes || []).filter((node) => fadedText(node)
+      || !replaced.has(parseColor(/foreground color:\s*(#[0-9a-f]{3,6})\b/i.exec(String(node.failureSummary || ""))?.[1] || "")?.hex))
   }));
   const overrides = consolidateOverrideRules(contrastRules(unmatched));
   const stylesheet = overrides.length ? await primaryStylesheet(publicDir) : null;
@@ -597,7 +813,8 @@ export async function resolveLinkInTextBlockIssues(publicDir, violations = []) {
 
 // ── Deterministic HTML Resolver ─────────────────────────────────────────────
 
-export function resolveHtmlA11yIssues(html, violations = [], { titles = null, fragment = false, language: fragmentLanguage = "" } = {}) {
+// scrollContainers: selectors the site's styles make scroll (scrollContainerSelectors), for a pass with no scan.
+export function resolveHtmlA11yIssues(html, violations = [], { titles = null, fragment = false, language: fragmentLanguage = "", scrollContainers = null } = {}) {
   if (!html || typeof html !== "string") return { html, changes: [] };
   const $ = load(html, { decodeEntities: false }, !fragment);
   const changes = [];
@@ -692,15 +909,89 @@ export function resolveHtmlA11yIssues(html, violations = [], { titles = null, fr
       const target = Array.isArray(node.target) ? node.target.join(" ") : String(node.target || "");
       let matches;
       try { matches = target ? $(target) : []; } catch { continue; }
-      matches.each?.((_, el) => {
-        if ($(el).attr("tabindex") !== undefined) return;
-        $(el).attr("tabindex", "0");
-        changes.push({ type: "scrollable_focusable", target: el.tagName.toLowerCase() });
-      });
+      matches.each?.((_, el) => focusScrollRegion($, el, changes));
     }
+  }
+  // ...and, with no scan to name them, every element the page's own styles make a scroll container (see
+  // scrollContainerSelectors for why this is decided from the stylesheet before the page is ever drawn).
+  if (scrollContainers) {
+    for (const selector of scrollContainers) {
+      let matches;
+      try { matches = $(selector); } catch { continue; }
+      matches.each((_, el) => focusScrollRegion($, el, changes, { measured: false }));
+    }
+    $("[style]").each((_, el) => {
+      if (SCROLLING_DECLARATION.test(`;${$(el).attr("style")}`)) focusScrollRegion($, el, changes, { measured: false });
+    });
   }
 
   return { html: $.html(), changes };
+}
+
+// ── Scroll containers, before the page is drawn ─────────────────────────────
+//
+// A SCROLL STRIP THE PAGE WRITER MADE WAS UNREACHABLE BY KEYBOARD (staging rehearsal, Nov 25 2026, about 7 PM Central).
+// Stillwater Yoga Studio's home page (build a4004fd1) had a "week at a glance" strip, `.week-glance { overflow-x: auto }`
+// holding fourteen classes of plain text. axe failed it as scrollable-region-focusable (serious), the only blocker on the
+// page; this file already knew the fix, but only from a scan in the website's own repository after deploy, so the
+// preview ended with "/" failed and no repair of any kind.
+//
+// Decided here, from the stylesheet, rather than in page.qa's browser. page.qa scans the deployed preview and has no
+// way to write markup back: its accessibilityRules are stylesheet rules, and tabindex is not one. Assembly is the last
+// point every new website and every migration passes before its commit, and it already names controls here
+// (repairStaticAccessibility). What it cannot know is whether the content overflows at some width; a container the
+// site's own styles declare as scrolling, with nothing focusable inside, is given the tab stop anyway. A tab stop on a
+// strip that happens to fit is harmless; a strip that scrolls and cannot be reached fails WCAG 2.1.1. Whatever this
+// misses (a container scrolled by a script, a stylesheet it could not read) is still measured by page.qa and handed to
+// the review repair with its rule, element and help text (build-handler-finalize.mjs summariseAccessibilityFindings).
+// generate-site-build.mjs withGalleryAccessibility did this for one class, .gallery-track; this is the general case.
+const SCROLLING_DECLARATION = /[;{\s]overflow(?:-x|-y|-inline|-block)?\s*:\s*[^;}]*\b(?:auto|scroll|overlay)\b/i;
+// The element at rest: a state (hover, focus) or a part (a scrollbar) is not where the content scrolls from.
+const NOT_AT_REST = /::|:(?:hover|focus|focus-within|focus-visible|active|visited|target|checked)\b/i;
+// Anything a keyboard already reaches. axe passes a scroll container holding one of these, so it gets no tab stop.
+const KEYBOARD_REACHABLE = "a[href], area[href], button, input:not([type='hidden']), select, textarea, iframe, summary, "
+  + "audio[controls], video[controls], [contenteditable]:not([contenteditable='false']), [tabindex]:not([tabindex^='-'])";
+
+// A selector list split at its top-level commas (a comma inside :is() or :not() belongs to the selector).
+function selectorList(text) {
+  const parts = [];
+  let depth = 0;
+  let current = "";
+  for (const char of String(text)) {
+    if (char === "(" || char === "[") depth += 1;
+    else if ((char === ")" || char === "]") && depth) depth -= 1;
+    if (char === "," && !depth) { parts.push(current); current = ""; } else current += char;
+  }
+  return [...parts, current].map((part) => part.replace(/\s+/g, " ").trim()).filter(Boolean);
+}
+
+// The selectors of every rule in `css` that makes its element scroll (overflow, overflow-x or overflow-y auto or scroll),
+// inside a media query or not: a strip that scrolls only on a phone must be reachable there too.
+export function scrollContainerSelectors(css) {
+  const selectors = new Set();
+  const source = String(css || "").replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const match of source.matchAll(/([^{}@;]+)\{([^{}]*)\}/g)) {
+    if (!SCROLLING_DECLARATION.test(`;${match[2]}`)) continue;
+    for (const selector of selectorList(match[1])) {
+      if (!NOT_AT_REST.test(selector)) selectors.add(selector);
+    }
+  }
+  return [...selectors];
+}
+
+// Gives a scroll container a tab stop, unless it needs none or must not have one. `measured` is false for a container
+// found from the stylesheet rather than by a scan: then an empty one (a cart drawer a script fills) is left alone too.
+function focusScrollRegion($, el, changes, { measured = true } = {}) {
+  const $el = $(el);
+  const tag = String(el.tagName || "").toLowerCase();
+  // The document scrolls by keyboard already, and a table box ignores overflow.
+  if (!tag || ["html", "body", "table"].includes(tag)) return;
+  if ($el.attr("tabindex") !== undefined || $el.is(KEYBOARD_REACHABLE) || $el.find(KEYBOARD_REACHABLE).length) return;
+  // A tab stop inside content hidden from assistive technology is itself a failure (aria-hidden-focus).
+  if ($el.closest("[aria-hidden='true'], [inert]").length) return;
+  if (!measured && !$el.text().trim() && !$el.find("img, picture, svg, video, canvas").length) return;
+  $el.attr("tabindex", "0");
+  changes.push({ type: "scrollable_focusable", target: tag });
 }
 
 // An icon-only control is named for what its icon means, in the page's language.
@@ -758,14 +1049,22 @@ function decodeURIComponentSafe(value) {
 export async function repairStaticAccessibility(siteDir) {
   const publicDir = path.join(siteDir, "public");
   const files = [];
+  const stylesheets = [];
   const walk = async (directory) => {
     for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
       const full = path.join(directory, entry.name);
       if (entry.isDirectory()) await walk(full);
       else if (entry.name.endsWith(".html")) files.push(full);
+      else if (entry.name.endsWith(".css")) stylesheets.push(full);
     }
   };
   await walk(publicDir);
+  // What the site's stylesheets make scroll; each page adds its own <style> blocks (pageScrollContainers).
+  const siteScrolling = scrollContainerSelectors((await Promise.all(stylesheets.map((file) => readFile(file, "utf8").catch(() => "")))).join("\n"));
+  const pageScrollContainers = (html) => {
+    const $ = load(html);
+    return [...new Set([...siteScrolling, ...scrollContainerSelectors($("style").map((_, style) => $(style).text()).get().join("\n"))])];
+  };
   const routeOf = (file) => `/${path.relative(publicDir, file).split(path.sep).join("/")}`.replace(/index\.html$/, "");
   const titles = new Map();
   const sources = new Map();
@@ -785,7 +1084,7 @@ export async function repairStaticAccessibility(siteDir) {
     const file = path.join(siteDir, fragmentFile);
     const source = await readFile(file, "utf8").catch(() => null);
     if (source === null) continue;
-    const { html, changes } = resolveHtmlA11yIssues(source, [], { titles, fragment: true, language: primaryLanguage });
+    const { html, changes } = resolveHtmlA11yIssues(source, [], { titles, fragment: true, language: primaryLanguage, scrollContainers: pageScrollContainers(source) });
     if (!changes.length) continue;
     await writeFile(file, html);
     repaired.push({ route: fragmentFile, changes: changes.length });
@@ -796,7 +1095,8 @@ export async function repairStaticAccessibility(siteDir) {
     // gain a bare <html lang><body> that re-adoption then records as the page's
     // root attributes, losing the source page's classes and its title.
     const fragment = !/<html\b|<!doctype/i.test(source);
-    const { html, changes } = resolveHtmlA11yIssues(source, [], { titles, fragment, language: fragment ? primaryLanguage : "" });
+    const { html, changes } = resolveHtmlA11yIssues(source, [], { titles, fragment, language: fragment ? primaryLanguage : "",
+      scrollContainers: pageScrollContainers(source) });
     if (!changes.length) continue;
     await writeFile(file, html);
     repaired.push({ route: routeOf(file), changes: changes.length });

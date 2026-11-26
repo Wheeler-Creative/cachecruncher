@@ -806,6 +806,9 @@ export function withSiteContent(handler, options = {}) {
         } catch { /* the page without its tags */ }
       }
       let content = await read(env);
+      // A page the platform reads as written is the website's own markup (its lists and page sets are read off it), so
+      // it is not given the visitor's rule for empty picture places.
+      const written = asWritten ? { hideEmptyPlaces: false } : {};
       const pathname = new URL(request.url).pathname;
       const language = (options.languagePrefixes || []).find(code => pathname.startsWith(`/${code}/`) || pathname === `/${code}`);
       // Not on a page the platform reads as written: what it reads there is the website's own markup.
@@ -820,14 +823,15 @@ export function withSiteContent(handler, options = {}) {
         const own = languageContent(content, language);
         content = JSON.stringify(imageContent(content));
         const images = await imagesFor(env).catch(() => null);
-        const base = resolveContent(response, content, { ...preview, origin: new URL(request.url).origin, images });
+        const base = resolveContent(response, content, { ...preview, origin: new URL(request.url).origin, images, ...written });
+        // The second pass is the same page's own words: the first already gave a visitor's page its rules.
         const resolved = Object.keys(own.values).length
-          ? resolveContent(base, JSON.stringify(own), { attributes: I18N_ATTRIBUTES })
+          ? resolveContent(base, JSON.stringify(own), { attributes: I18N_ATTRIBUTES, hideEmptyPlaces: false })
           : base;
         return preview.highlight ? markPreviewResponse(resolved) : advertiseRules(resolved, env, { signupForms: joins });
       }
       const resolved = resolveContent(response, content, {
-        ...preview, origin: new URL(request.url).origin, images: await imagesFor(env).catch(() => null)
+        ...preview, origin: new URL(request.url).origin, images: await imagesFor(env).catch(() => null), ...written
       });
       if (!preview.highlight) return advertiseRules(resolved, env, { signupForms: joins });
       // A page with an outline drawn on it is not the page: never index it,
