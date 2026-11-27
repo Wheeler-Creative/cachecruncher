@@ -3,7 +3,9 @@
 
 import { cleanTarget, normalizePresentation } from "./newsletter-blocks.js";
 
-export const NEWSLETTER_RENDER_VERSION = 5;
+// 6: a web issue has one main heading, its subject, so its page reads right to search engines (Baumberger Endowment,
+// 2026-11-26: a PDF issue's page had no <h1>).
+export const NEWSLETTER_RENDER_VERSION = 6;
 
 // The script a web issue carries to fit each PDF glyph run to its column once the fonts are in. A fixed text, on
 // purpose: the portal shows the issue in its preview frame page, whose content security policy allows this script
@@ -34,6 +36,8 @@ function absolute(target, origin) {
 }
 
 const paragraphs = (text) => String(text || "").split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+const oneLine = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
+const sameWords = (left, right) => oneLine(left).toLowerCase() === oneLine(right).toLowerCase();
 
 export function issueDateLabel(issueDate, language = "en") {
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(issueDate || ""));
@@ -49,14 +53,20 @@ export function renderIssueHtml(issue, { siteName = "", origin = "", accent = "#
   const template = issue?.template?.blocks ? issue.template : { blocks: [] };
   const content = issue?.content || {};
   const safeAccent = /^#[0-9a-f]{6}$/i.test(accent) ? accent : "#1f5885";
-  let firstHeading = true;
+  // On the website an issue's page has one main heading, its subject: the first heading is it when it says the same,
+  // otherwise the subject goes above the issue and every heading of the issue is a heading under it. Email is as written.
+  const page = format === "fragment";
+  const subject = oneLine(issue?.title);
+  let firstHeading = true, subjectDrawn = false;
   const body = [];
   for (const block of template.blocks) {
     const value = content[block.key];
     if (block.kind === "divider") {
       body.push('<hr style="border:0;border-top:1px solid #dde3ea;margin:26px 0">');
     } else if (block.kind === "heading" && value) {
-      const level = firstHeading ? "h1" : "h2";
+      const main = page ? firstHeading && !subjectDrawn && Boolean(subject) && sameWords(value, subject) : firstHeading;
+      if (main) subjectDrawn = true;
+      const level = main ? "h1" : "h2";
       const size = firstHeading ? 30 : 21;
       const above = firstHeading ? 0 : 26;
       const below = firstHeading ? 14 : 10;
@@ -82,7 +92,9 @@ export function renderIssueHtml(issue, { siteName = "", origin = "", accent = "#
   const dateLabel = issueDateLabel(issue?.issueDate, language);
   const eyebrow = [siteName, dateLabel].filter(Boolean).map(escapeHtml).join(" · ");
   const preheader = String(issue?.summary || "").trim();
-  if (format === "fragment") return { head: "", body: `<div class="pdf-newsletter" style="max-width:900px;margin:auto;padding:24px">${body.join("")}</div>` };
+  const heading = page && subject && !subjectDrawn
+    ? `<h1 style="margin:0 0 14px;font:700 30px/1.25 Georgia,'Times New Roman',serif;color:#14202b">${escapeHtml(subject)}</h1>` : "";
+  if (format === "fragment") return { head: "", body: `<div class="pdf-newsletter" style="max-width:900px;margin:auto;padding:24px">${heading}${body.join("")}</div>` };
   return `<!doctype html><html lang="${escapeHtml(language)}"><head><meta charset="utf-8">`
     + '<meta name="viewport" content="width=device-width, initial-scale=1">'
     + `<title>${escapeHtml(issue?.title || "Newsletter")}</title></head>`
@@ -172,10 +184,11 @@ function renderPdfIssue(issue, { origin, language, downloadUrl, fragment = false
     return `@font-face{font-family:pdf-${font.id};src:url("${escapeHtml(versioned)}");font-display:block}`;
   }).join("");
   const head = `<style>${faces}
-.pdf-document{margin:0;background:#e9edef;color:#151515;font-family:Georgia,serif}.pdf-newsletter,.pdf-newsletter *{box-sizing:border-box}.ww-newsletter-main{display:block;max-width:none;margin:0;padding:0}.pdf-newsletter{max-width:900px;margin:auto}.pdf-page{position:relative;container-type:inline-size;background:#fff;margin:20px 0;overflow:hidden}.pdf-artwork{position:absolute;inset:0;width:100%;height:100%}.pdf-image,.pdf-run,.pdf-readable{position:absolute}.pdf-image{object-fit:fill}.pdf-block{margin:0;font:inherit}.pdf-desktop{pointer-events:none;user-select:none}.pdf-glyph{position:absolute;left:0;top:0;display:inline-flex;width:max-content;white-space:pre}.pdf-word,.pdf-space{flex:none}.pdf-word::before{content:var(--pdf-glyph)}.pdf-readable{color:transparent;line-height:1.3;font-family:Georgia,serif}.pdf-readable p{margin:0 0 .7em}.pdf-readable::selection,.pdf-readable *::selection{background:#7abce366;color:transparent}.pdf-edit{color:var(--pdf-colour)}.pdf-edit::selection,.pdf-edit *::selection{color:inherit}.pdf-download{padding:16px;text-align:right;background:#fff}.pdf-download a{color:#15557b}.pdf-extra{padding:20px;background:#fff}.pdf-extra:empty{display:none}
+.pdf-document{margin:0;background:#e9edef;color:#151515;font-family:Georgia,serif}.pdf-newsletter,.pdf-newsletter *{box-sizing:border-box}.ww-newsletter-main{display:block;max-width:none;margin:0;padding:0}.pdf-newsletter{max-width:900px;margin:auto}.pdf-page{position:relative;container-type:inline-size;background:#fff;margin:20px 0;overflow:hidden}.pdf-artwork{position:absolute;inset:0;width:100%;height:100%}.pdf-image,.pdf-run,.pdf-readable{position:absolute}.pdf-image{object-fit:fill}.pdf-block{margin:0;font:inherit}.pdf-desktop{pointer-events:none;user-select:none}.pdf-glyph{position:absolute;left:0;top:0;display:inline-flex;width:max-content;white-space:pre}.pdf-word,.pdf-space{flex:none}.pdf-word::before{content:var(--pdf-glyph)}.pdf-readable{color:transparent;line-height:1.3;font-family:Georgia,serif}.pdf-readable p{margin:0 0 .7em}.pdf-readable::selection,.pdf-readable *::selection{background:#7abce366;color:transparent}.pdf-edit{color:var(--pdf-colour)}.pdf-edit::selection,.pdf-edit *::selection{color:inherit}.pdf-title{margin:24px 20px 0}.pdf-download{padding:16px;text-align:right;background:#fff}.pdf-download a{color:#15557b}.pdf-extra{padding:20px;background:#fff}.pdf-extra:empty{display:none}
 @media(max-width:600px){.pdf-document{background:#fff}.pdf-page{aspect-ratio:auto!important;margin:0;padding:20px;overflow:visible;container-type:normal}.pdf-desktop,.pdf-artwork,.pdf-decoration{display:none}.pdf-readable{position:static;width:auto!important;min-height:0!important;color:var(--pdf-colour);font:16px/1.6 Georgia,serif;font-size:16px!important}.pdf-readable p{margin:0 0 1em}.pdf-page>h2 .pdf-readable{font-size:22px!important;font-weight:700}.pdf-photo{position:static;width:100%!important;height:auto!important;max-width:360px;display:block;margin:0 0 20px}.pdf-page>h2:first-of-type .pdf-readable{font-size:28px!important}}
 </style>`;
-  const body = `<div class="pdf-newsletter">${pages}<div class="pdf-extra">${extra}</div>${href ? `<div class="pdf-download"><a href="${escapeHtml(href)}" download>Download PDF</a></div>` : ""}</div><script>${NEWSLETTER_FIT_SCRIPT}</script>`;
+  const subject = oneLine(issue.title);
+  const body = `<div class="pdf-newsletter">${subject ? `<h1 class="pdf-title">${escapeHtml(subject)}</h1>` : ""}${pages}<div class="pdf-extra">${extra}</div>${href ? `<div class="pdf-download"><a href="${escapeHtml(href)}" download>Download PDF</a></div>` : ""}</div><script>${NEWSLETTER_FIT_SCRIPT}</script>`;
   if (fragment) return { head, body };
   return `<!doctype html><html lang="${escapeHtml(language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(issue.title)}</title>${head}</head><body class="pdf-document"><main>${body}</main></body></html>`;
 }

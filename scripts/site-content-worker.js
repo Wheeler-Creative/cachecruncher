@@ -25,7 +25,7 @@
 // what makes it safe to run on every request.
 
 import { CONTENT_RULES_VERSION, I18N_ATTRIBUTES, contentTransforms, creditShown, imageContent, languageContent, parseContent, parseImageIndex, seoVerificationFile } from "./site-content-rules.js";
-import { NEWSLETTER_RENDER_VERSION, newsletterPath, publishedNewsletters, replaceNewsletterPdfs, serveNewsletter } from "./newsletter-site.js";
+import { NEWSLETTER_RENDER_VERSION, newsletterPath, newsletterSiteName, publishedNewsletters, replaceNewsletterPdfs, serveNewsletter } from "./newsletter-site.js";
 import { COLLECTIONS_RENDER_VERSION, addCollectionNav, addSitemapPages, collectionSitemap, fillCollectionPlaces, parseCollectionsIndex, serveCollection } from "./collection-pages-site.js";
 import { DATED_RENDER_VERSION, addModuleNav, moduleNavLinks, newsletterSnapshot, parseEventsSnapshot, serveDatedPage } from "./dated-page-site.js";
 import { POPUPS_RENDER_VERSION, activePopup, addPopup, parsePopups, popupAsset } from "./popup-site.js";
@@ -664,8 +664,10 @@ export function withSiteContent(handler, options = {}) {
       }
       const newsletterRoute = new URL(request.url).pathname.startsWith("/newsletter/");
       if (newsletterRoute && siteId) {
-        response = await serveNewsletter(request, env?.[options.binding || "MEDIA"], siteId, publishedNewsletters(await readNewsletter(env)), {
-          shell: () => handler.fetch(new Request(new URL("/", request.url), { headers: request.headers }), env, ctx)
+        const newsletter = await readNewsletter(env);
+        response = await serveNewsletter(request, env?.[options.binding || "MEDIA"], siteId, publishedNewsletters(newsletter), {
+          shell: () => handler.fetch(new Request(new URL("/", request.url), { headers: request.headers }), env, ctx),
+          siteName: newsletterSiteName(newsletter)
         });
         if (response && !resolvable(response)) return response;
       }
