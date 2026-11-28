@@ -10,8 +10,8 @@
 // holds the two to the same answers.
 //
 // Outputs: request_id, request_branch, preview_worker_name, approved_commit, branch_head, refusal.
+import { existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { headers, loadConfig, output, repositoryMatches, requireEnvironment, restUrl } from "./lib.mjs";
 
@@ -119,7 +119,7 @@ export async function findApproved({ config, requestedId = "", fetchImpl = fetch
   };
 }
 
-const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invokedDirectly = process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
   requireEnvironment(["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "GITHUB_REPOSITORY"]);
   await output(await findApproved({ config: await loadConfig(), requestedId: process.env.REQUEST_ID || "" }));

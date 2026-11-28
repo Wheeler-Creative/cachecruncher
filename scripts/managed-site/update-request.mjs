@@ -1,9 +1,9 @@
-import path from "node:path";
+import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { insertRow, requireEnvironment, updateBuildsForRequest, updateRequest } from "./lib.mjs";
 
 const invokedDirectly = process.argv[1]
-  && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+  && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 
 export async function applyRequestStatus({ status, requestId, env = process.env, fetchImpl = fetch, now = new Date() }) {
   if (!status) throw new Error("Status is required");

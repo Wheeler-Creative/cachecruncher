@@ -11,8 +11,7 @@
 // and validate (GH_TOKEN optionally, so the test selector can find the last deploy), CLOUDFLARE_API_TOKEN for
 // deploy, and SUPABASE_URL with SUPABASE_SERVICE_ROLE_KEY for index.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import path from "node:path";
+import { existsSync, realpathSync } from "node:fs";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { wranglerHostingArgs } from "./hosting.mjs";
@@ -49,7 +48,7 @@ export const PHASES = {
 };
 
 const phase = process.argv[2];
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (process.argv[1] && existsSync(process.argv[1]) && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
   if (!Object.hasOwn(PHASES, phase)) {
     console.error(`Usage: deploy-site.mjs ${Object.keys(PHASES).join("|")}`);
     process.exit(2);
